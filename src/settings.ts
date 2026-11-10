@@ -136,6 +136,89 @@ const HIDDEN_IN_IMPORT_ONLY = new Set<string>([
   "Recipe language",
 ]);
 
+/**
+ * One-click provider presets. Each writes provider + base URL + model, so the
+ * user doesn't have to know that Groq is "OpenAI-compatible with a different
+ * host" — and switching to a second free quota is two clicks.
+ */
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  provider: "gemini" | "openai";
+  baseUrl: string;
+  model: string;
+}
+
+export const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    id: "gemini",
+    label: "Google Gemini (AI Studio)",
+    provider: "gemini",
+    baseUrl: "",
+    model: "",
+  },
+  {
+    id: "groq",
+    label: "Groq (Qwen3.8-27B, 1.000 Anfragen/Tag gratis)",
+    provider: "openai",
+    baseUrl: "https://api.groq.com/openai/v1",
+    model: "qwen/qwen3.8-27b",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    provider: "openai",
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "google/gemini-3.5-flash-lite",
+  },
+  {
+    id: "ollama",
+    label: "Ollama (lokal oder NAS)",
+    provider: "openai",
+    baseUrl: "http://localhost:11434/v1",
+    model: "",
+  },
+  {
+    id: "custom",
+    label: "Anderer OpenAI-kompatibler Anbieter",
+    provider: "openai",
+    baseUrl: "",
+    model: "",
+  },
+];
+
+/** Which preset the current settings correspond to. */
+export function currentPreset(s: {
+  aiProvider: string;
+  aiBaseUrl: string;
+}): string {
+  if (s.aiProvider === "gemini") return "gemini";
+  const base = (s.aiBaseUrl || "").replace(/\/+$/, "");
+  if (base === "https://api.groq.com/openai/v1") return "groq";
+  if (base === "https://openrouter.ai/api/v1") return "openrouter";
+  if (
+    base.startsWith("http://localhost:11434") ||
+    base.startsWith("http://127.0.0.1:11434")
+  )
+    return "ollama";
+  return "custom";
+}
+
+export function applyPreset(
+  s: {
+    aiProvider: "gemini" | "openai";
+    aiBaseUrl: string;
+    importModel: string;
+  },
+  id: string,
+): void {
+  const preset = PROVIDER_PRESETS.find((p) => p.id === id);
+  if (!preset) return;
+  s.aiProvider = preset.provider;
+  s.aiBaseUrl = preset.baseUrl;
+  s.importModel = preset.model;
+}
+
 export const DEFAULT_SETTINGS: PluginSettings = {
   mobileRecipeLayout: "classic",
   collapseRecipeProperties: true,
@@ -708,17 +791,25 @@ export class SettingsTab extends PluginSettingTab {
         },
       },
       {
-        name: "KI-Anbieter",
-        desc: "Gemini nutzt die native Google-API (nötig für AQ.-Schlüssel). OpenAI-kompatibel deckt OpenRouter, Ollama, LM Studio, llama.cpp, Groq und ähnliche ab.",
+        name: "Anbieter",
+        desc:
+          "Ein Klick setzt Basis-URL und Modell mit. Gemini: native Google-API (nötig für AQ.-Schlüssel). " +
+          "Groq: kostenlos 1.000 Anfragen/Tag, sehr schnell, eigenes Kontingent. Ollama: ganz ohne Kontingent, " +
+          "lokal oder auf dem NAS.",
         render: (setting) => {
           setting.addDropdown((dropdown) => {
+            for (const preset of PROVIDER_PRESETS) {
+              dropdown.addOption(preset.id, preset.label);
+            }
             dropdown
-              .addOption("gemini", "Google Gemini (AI Studio)")
-              .addOption("openai", "OpenAI-kompatibel (OpenRouter, Ollama, …)")
-              .setValue(this.plugin.settings.aiProvider)
+              .setValue(
+                currentPreset({
+                  aiProvider: this.plugin.settings.aiProvider,
+                  aiBaseUrl: this.plugin.settings.aiBaseUrl,
+                }),
+              )
               .onChange(async (value) => {
-                this.plugin.settings.aiProvider =
-                  value === "openai" ? "openai" : "gemini";
+                applyPreset(this.plugin.settings, value);
                 await this.plugin.saveSettings();
                 this.refresh();
               });
