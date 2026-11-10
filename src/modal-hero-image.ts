@@ -21,6 +21,8 @@ export interface HeroImageOptions {
   sources: HeroSource[];
   /** Set when the note already has a hero file, so we can ask before replacing. */
   existingPath?: string;
+  /** Button text; the standalone "set a hero" flow says something else. */
+  confirmLabel?: string;
   /** Persist the crop and link it from the note. */
   save: (blob: Blob) => Promise<void>;
 }
@@ -160,6 +162,11 @@ export class HeroImageModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
+    if (!this.opts.sources.length) {
+      this.renderEmpty(contentEl);
+      return;
+    }
+
     contentEl.createEl("h3", { text: "Titelbild hinzufügen?" });
     contentEl.createEl("p", {
       cls: "setting-item-description",
@@ -215,7 +222,9 @@ export class HeroImageModal extends Modal {
       this.paintRect();
       if (this.confirmBtn) {
         this.confirmBtn.disabled = false;
-        this.confirmBtn.setText("Ausschnitt übernehmen");
+        this.confirmBtn.setText(
+          this.opts.confirmLabel ?? "Ausschnitt übernehmen",
+        );
       }
     };
     if (img.complete) window.setTimeout(laidOut, 0);
@@ -260,13 +269,70 @@ export class HeroImageModal extends Modal {
       text: this.busy
         ? "Speichert…"
         : this.ready
-          ? "Ausschnitt übernehmen"
+          ? this.opts.confirmLabel ?? "Ausschnitt übernehmen"
           : "Bild wird geladen…",
       cls: "mod-cta",
     });
     confirm.disabled = this.busy || !this.ready;
     this.confirmBtn = confirm;
     confirm.addEventListener("click", () => void this.commit());
+  }
+
+  /** No image yet: offer the picker and a drop target. */
+  private renderEmpty(contentEl: HTMLElement): void {
+    contentEl.createEl("h3", { text: "Titelbild festlegen" });
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: `Für „${this.opts.noteName}“ ist noch kein Titelbild hinterlegt.`,
+    });
+
+    const drop = contentEl.createDiv({ cls: "hero-crop-empty" });
+    drop.createEl("p", {
+      cls: "hero-crop-empty-hint",
+      text: "Foto hierher ziehen — oder auswählen (auf dem Telefon: Kamera oder Galerie).",
+    });
+    const pick = drop.createEl("button", {
+      text: "Bild wählen…",
+      cls: "mod-cta",
+    });
+    pick.addEventListener("click", () => void this.pickOtherImage());
+
+    drop.addEventListener("dragover", (evt) => {
+      evt.preventDefault();
+      drop.addClass("is-over");
+    });
+    drop.addEventListener("dragleave", () => drop.removeClass("is-over"));
+    drop.addEventListener("drop", (evt) => {
+      evt.preventDefault();
+      drop.removeClass("is-over");
+      const file = evt.dataTransfer?.files?.[0];
+      if (file) void this.addFile(file);
+    });
+
+    if (this.error) {
+      contentEl.createEl("p", { cls: "recipe-import-error", text: this.error });
+    }
+
+    const actions = contentEl.createDiv({ cls: "modal-button-container" });
+    const skip = actions.createEl("button", { text: "Abbrechen" });
+    skip.addEventListener("click", () => this.close());
+  }
+
+  /** Read one file into the source list and jump to it. */
+  private async addFile(file: File): Promise<void> {
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      await readImage(dataUrl);
+      this.opts.sources.push({ dataUrl, label: file.name });
+      this.images.push(await readImage(dataUrl));
+      this.index = this.opts.sources.length - 1;
+      this.ready = false;
+      this.error = "";
+      this.render();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      this.render();
+    }
   }
 
   /* ------------------------------ geometry ------------------------------ */
@@ -452,21 +518,7 @@ export class HeroImageModal extends Modal {
     });
     input.addEventListener("change", () => {
       const file = input.files?.[0];
-      if (!file) return;
-      void (async () => {
-        try {
-          const dataUrl = await readFileAsDataUrl(file);
-          await readImage(dataUrl);
-          this.opts.sources.push({ dataUrl, label: file.name });
-          this.images.push(await readImage(dataUrl));
-          this.index = this.opts.sources.length - 1;
-          this.error = "";
-          this.render();
-        } catch (error) {
-          this.error = error instanceof Error ? error.message : String(error);
-          this.render();
-        }
-      })();
+      if (file) void this.addFile(file);
     });
     input.click();
   }

@@ -1812,3 +1812,18 @@ select.rg-order-select.filtered {
   user-select: none;
   pointer-events: none;
 }
+.hero-crop-empty {
+  margin: 10px 0;
+  padding: 22px 16px;
+  border: 2px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  text-align: center;
+}
+.hero-crop-empty.is-over {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+.hero-crop-empty-hint {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+}

@@ -339,6 +339,10 @@ export default class RecipeVault extends Plugin {
     const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
     if (!fm) return false;
 
+    // This vault marks recipes with `recipe: true` rather than a tag.
+    const flag = (fm as Record<string, unknown>).recipe;
+    if (flag === true || String(flag).toLowerCase() === "true") return true;
+
     const tags: unknown = fm.tags;
     const hasRecipeTag = Array.isArray(tags)
       ? tags.some(
@@ -1293,6 +1297,34 @@ export default class RecipeVault extends Plugin {
       name: "Rezept aus Foto importieren",
       callback: () => this.openImportModal("photo"),
     });
+
+    // The hero picture isn't only an import concern: after cooking you want
+    // your own photo on the recipe. Same dialog, no source images.
+    this.addCommand({
+      id: c.CMD_SET_HERO,
+      name: "Titelbild setzen oder ändern",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "md" || !this.isRecipeFile(file)) {
+          return false;
+        }
+        if (!checking) void this.setHeroForFile(file);
+        return true;
+      },
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        if (!this.isRecipeFile(file)) return;
+        menu.addItem((item) =>
+          item
+            .setTitle("Titelbild setzen oder ändern")
+            .setIcon("image")
+            .onClick(() => void this.setHeroForFile(file)),
+        );
+      }),
+    );
 
     // Command to increment times_made on the active recipe file
     this.addCommand({
@@ -2987,6 +3019,33 @@ export default class RecipeVault extends Plugin {
     }
   }
 
+  /** Standalone hero picker, for a note that already exists. */
+  private async setHeroForFile(file: TFile): Promise<void> {
+    const existing = this.findHeroFile(file);
+    const sources: HeroSource[] = [];
+    if (existing) {
+      const mime =
+        existing.extension === "png"
+          ? "image/png"
+          : existing.extension === "webp"
+            ? "image/webp"
+            : "image/jpeg";
+      const buffer = await this.app.vault.readBinary(existing);
+      sources.push({
+        dataUrl: await this.blobToDataUrl(new Blob([buffer], { type: mime })),
+        label: "Aktuell",
+      });
+    }
+
+    new HeroImageModal(this.app, {
+      noteName: file.basename,
+      sources,
+      existingPath: existing?.path,
+      confirmLabel: "Titelbild speichern",
+      save: (blob) => this.writeHeroImage(file, blob),
+    }).open();
+  }
+
   private blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -3259,7 +3318,11 @@ export default class RecipeVault extends Plugin {
 
   /** Import-only build: remove the commands that don't belong here. */
   private stripNonImportCommands(): void {
-    const keep = new Set<string>([c.CMD_OPEN_MODAL, c.CMD_RECIPE_FROM_PHOTO]);
+    const keep = new Set<string>([
+      c.CMD_OPEN_MODAL,
+      c.CMD_RECIPE_FROM_PHOTO,
+      c.CMD_SET_HERO,
+    ]);
     const drop = [
       c.CMD_OPEN_RECIPE_GALLERY,
       c.CMD_COOK_MODE,

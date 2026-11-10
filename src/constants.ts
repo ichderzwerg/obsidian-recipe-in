@@ -11,6 +11,7 @@ export const CMD_BACKFILL_INGREDIENTS = "cmd-backfill-ingredients";
 export const CMD_BACKFILL_NUTRITION = "cmd-backfill-nutrition";
 export const CMD_STOP_NUTRITION = "cmd-stop-nutrition";
 export const CMD_RECIPE_FROM_PHOTO = "cmd-recipe-from-photo";
+export const CMD_SET_HERO = "cmd-set-hero";
 export const CMD_IMPORT_JSONLD = "cmd-import-jsonld";
 export const CMD_EXPORT_JSONLD = "cmd-export-jsonld";
 export const CMD_EXPORT_COOKLANG = "cmd-export-cooklang";
