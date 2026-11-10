@@ -69,6 +69,21 @@ next to the upstream `recipe-vault` without collisions.
 - Photos are downscaled to 1600 px / JPEG 0.85 in the dialog before upload — a 4 MB
   phone picture becomes a few hundred KB, which also cuts token cost.
 
+## Hero picture
+
+After a successful import, a second dialog offers the title picture:
+
+- **Photo imports** crop from the pages that were just uploaded — at native
+  resolution, not from the downscaled copy sent to the model.
+- **URL imports** start from the page's own lead image (`og:image`, because
+  JSON-LD usually only carries an `#primaryimage` reference).
+- Drag the frame, resize from a corner, pick an aspect (4:3 default, 3:2, 1:1,
+  16:9, free) or "Ganzes Bild". `Anderes Bild…` swaps in a file, `Überspringen` skips.
+- Result: `<Note>.jpg` next to the note (max 1600 px, JPEG 0.9) plus
+  `image: "[[<Note>.jpg]]"` in the front matter. The canvas round-trip bakes EXIF
+  rotation, so the PDF export stays upright.
+- Existing hero → asks before replacing. Fewer than 200 px on either side → refused.
+
 ## Known limits
 
 - Ingredient names are not canonicalised against existing `[[…]]` notes yet

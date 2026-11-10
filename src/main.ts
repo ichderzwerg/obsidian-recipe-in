@@ -34,6 +34,11 @@ import {
 import { PhotoRecipeModal } from "./modal-photo-recipe";
 import { ImportNoteModal, type NoteDraft } from "./modal-import-note";
 import {
+  HeroImageModal,
+  confirmReplaceHero,
+  type HeroSource,
+} from "./modal-hero-image";
+import {
   generateText,
   stripFence,
   DEFAULT_GEMINI_MODEL,
@@ -2927,6 +2932,121 @@ export default class RecipeVault extends Plugin {
     }
   }
 
+  /* --------------------------- hero picture --------------------------- */
+
+  /**
+   * After an import: offer to cut a hero picture out of the source.
+   *
+   * Photo imports crop from the pages the user just uploaded; URL imports start
+   * from the site's own lead image, fetched here so the dialog has pixels to
+   * show. Either way the result is a sibling `<note>.jpg` plus `image:` in the
+   * front matter.
+   */
+  private async offerHeroImage(
+    note: TFile,
+    originals: Blob[],
+    draft: NoteDraft,
+  ): Promise<void> {
+    try {
+      const sources: HeroSource[] = [];
+      for (let index = 0; index < originals.length; index++) {
+        sources.push({
+          dataUrl: await this.blobToDataUrl(originals[index]),
+          label: originals.length > 1 ? `Seite ${index + 1}` : "Foto",
+        });
+      }
+
+      if (!sources.length && draft.sourceImageUrl) {
+        const remote = await this.fetchImageAsBlob(draft.sourceImageUrl);
+        if (remote) {
+          sources.push({
+            dataUrl: await this.blobToDataUrl(remote),
+            label: "Website",
+          });
+        }
+      }
+
+      if (!sources.length) return;
+
+      const existing = this.findHeroFile(note);
+      if (existing) {
+        const replace = await confirmReplaceHero(this.app, existing.path);
+        if (!replace) return;
+      }
+
+      new HeroImageModal(this.app, {
+        noteName: note.basename,
+        sources,
+        save: (blob) => this.writeHeroImage(note, blob),
+      }).open();
+    } catch (error) {
+      console.error("Recipe import: hero picture offer failed", error);
+      new Notice(
+        "Titelbild konnte nicht angeboten werden — die Notiz ist gespeichert.",
+      );
+    }
+  }
+
+  private blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () =>
+        reject(reader.error ?? new Error("Bild unlesbar."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  private async fetchImageAsBlob(url: string): Promise<Blob | null> {
+    try {
+      // Never let a slow CDN hold up the "add a hero?" step.
+      const response = await Promise.race([
+        requestUrl({ url, method: "GET", throw: false }),
+        new Promise<never>((_resolve, reject) =>
+          window.setTimeout(
+            () => reject(new Error("Zeitüberschreitung beim Bild-Download.")),
+            10000,
+          ),
+        ),
+      ]);
+      if (response.status < 200 || response.status >= 300) return null;
+      const type = this.detectImageType(response.arrayBuffer);
+      if (!type) return null;
+      return new Blob([response.arrayBuffer], { type: type.mime });
+    } catch {
+      return null;
+    }
+  }
+
+  /** The hero file the recipe view and the PDF export would use. */
+  private findHeroFile(note: TFile): TFile | null {
+    const folder =
+      note.parent && !note.parent.isRoot() ? `${note.parent.path}/` : "";
+    for (const ext of ["jpg", "jpeg", "png", "webp"]) {
+      const path = normalizePath(`${folder}${note.basename}.${ext}`);
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile) return file;
+    }
+    return null;
+  }
+
+  private async writeHeroImage(note: TFile, blob: Blob): Promise<void> {
+    const folder =
+      note.parent && !note.parent.isRoot() ? `${note.parent.path}/` : "";
+    const path = normalizePath(`${folder}${note.basename}.jpg`);
+    const buffer = await blob.arrayBuffer();
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) {
+      await this.app.vault.modifyBinary(existing, buffer);
+    } else {
+      await this.app.vault.createBinary(path, buffer);
+    }
+    await this.app.fileManager.processFrontMatter(note, (frontmatter) => {
+      (frontmatter as Record<string, unknown>).image =
+        `[[${note.basename}.jpg]]`;
+    });
+  }
+
   /* ---------------------- import-only: AI note import ---------------------- */
 
   private openImportModal(mode: "url" | "photo", presetUrl?: string): void {
@@ -2936,6 +3056,8 @@ export default class RecipeVault extends Plugin {
       fromUrl: (url) => this.importNoteFromUrl(url),
       fromImages: (images) => this.importNoteFromImages(images),
       save: (draft, title) => this.saveImportedNote(draft, title),
+      afterSave: (file, originals, draft) =>
+        this.offerHeroImage(file, originals, draft),
     }).open();
   }
 
@@ -2997,7 +3119,8 @@ export default class RecipeVault extends Plugin {
         "Auf dieser Seite wurde kein Rezept gefunden. Bei Seiten ohne Rezeptdaten hilft ein Foto oder eingefügter Text.",
       );
     }
-    const source = this.recipeSourceText(recipes[0], url);
+    const recipe = recipes[0];
+    const source = this.recipeSourceText(recipe, url);
     const note = await generateText(this.aiConfig(), {
       system: buildTextImportPrompt({
         language: this.importLanguage(),
@@ -3006,7 +3129,69 @@ export default class RecipeVault extends Plugin {
       }),
       text: source,
     });
-    return { note: stripFence(note) };
+    return {
+      note: stripFence(note),
+      sourceImageUrl: await this.resolveLeadImage(recipe, url),
+    };
+  }
+
+  /**
+   * The page's own photo, as a URL the hero dialog can load.
+   *
+   * JSON-LD is unhelpful here: many sites emit `image: { "@id": "…#primaryimage" }`
+   * (a reference, not a URL), so we fall back to the `og:image` meta tag before
+   * giving up.
+   */
+  private async resolveLeadImage(
+    recipe: ParsedRecipe,
+    pageUrl: string,
+  ): Promise<string | undefined> {
+    const fromLd = (value: unknown): string | undefined => {
+      if (typeof value === "string") {
+        return /^https?:\/\//i.test(value) && !value.includes("#")
+          ? value
+          : undefined;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const found = fromLd(item);
+          if (found) return found;
+        }
+        return undefined;
+      }
+      if (value && typeof value === "object") {
+        const record = value as Record<string, unknown>;
+        for (const key of ["url", "contentUrl", "@id"]) {
+          const found = fromLd(record[key]);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    };
+
+    const direct = fromLd(recipe.image);
+    if (direct) return direct;
+
+    try {
+      const response = await requestUrl({
+        url: pageUrl,
+        method: "GET",
+        throw: false,
+      });
+      if (response.status < 200 || response.status >= 300) return undefined;
+      const html = response.text ?? "";
+      const patterns = [
+        /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+        /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
+      ];
+      for (const pattern of patterns) {
+        const match = pattern.exec(html);
+        if (match?.[1]) return match[1];
+      }
+    } catch {
+      /* no lead image — the hero dialog simply won't be offered */
+    }
+    return undefined;
   }
 
   /** Plain-text view of a scraped recipe, for the text prompt. */
@@ -3046,7 +3231,7 @@ export default class RecipeVault extends Plugin {
   private async saveImportedNote(
     draft: NoteDraft,
     title: string,
-  ): Promise<void> {
+  ): Promise<TFile> {
     const folder = this.settings.folder?.trim() || "";
     if (folder) await this.folderCheck(folder);
 
@@ -3056,18 +3241,8 @@ export default class RecipeVault extends Plugin {
     const note = this.withTitle(draft.note, safeName);
     const file = await this.app.vault.create(path, note);
 
-    if (draft.imageBlob) {
-      try {
-        await this.saveCooklangPhoto(file, await draft.imageBlob.arrayBuffer());
-      } catch (error) {
-        console.error("Recipe import: saving the photo failed", error);
-        new Notice(
-          "Notiz gespeichert, aber das Foto konnte nicht übernommen werden.",
-        );
-      }
-    }
-
     new Notice(`Rezept gespeichert: ${file.path}`);
+    return file;
   }
 
   /** Keep the front matter's title in sync with the file name. */

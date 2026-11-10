@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Setting } from "obsidian";
+import { App, Modal, Notice, Setting, TFile } from "obsidian";
 
 /**
  * One import dialog for both sources: a URL or one or more photos.
@@ -11,7 +11,8 @@ export type ImportMode = "url" | "photo";
 
 export interface NoteDraft {
   note: string;
-  imageBlob?: Blob;
+  /** Hero picture the import already knows about (site lead image). */
+  sourceImageUrl?: string;
 }
 
 export interface ImportModalOptions {
@@ -22,8 +23,14 @@ export interface ImportModalOptions {
   fromUrl?: (url: string) => Promise<NoteDraft>;
   /** Turn photos (base64 data URLs) into a note. */
   fromImages?: (images: string[]) => Promise<NoteDraft>;
-  /** Write the reviewed note into the vault. */
-  save: (draft: NoteDraft, title: string) => Promise<void>;
+  /** Write the reviewed note into the vault; returns the created file. */
+  save: (draft: NoteDraft, title: string) => Promise<TFile | void>;
+  /** Called after a successful save — the moment to offer a hero picture. */
+  afterSave?: (
+    file: TFile,
+    originals: Blob[],
+    draft: NoteDraft,
+  ) => void | Promise<void>;
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -77,6 +84,8 @@ export class ImportNoteModal extends Modal {
   private step: 1 | 2 = 1;
   private url = "";
   private images: string[] = [];
+  /** The untouched files, kept for cropping a hero picture at native size. */
+  private originals: Blob[] = [];
   private draft: NoteDraft | null = null;
   private title = "";
   private busy = false;
@@ -190,6 +199,7 @@ export class ImportNoteModal extends Modal {
       void (async () => {
         for (const file of files) {
           const raw = await readFileAsDataUrl(file);
+          this.originals.push(file);
           this.images.push(await downscale(raw));
         }
         if (files.length) {
@@ -308,12 +318,19 @@ export class ImportNoteModal extends Modal {
         this.error = "";
         this.render();
         try {
-          await this.opts.save(
-            { note: draft.note, imageBlob: draft.imageBlob },
+          const saved = await this.opts.save(
+            draft,
             this.title.trim() || "Rezept",
           );
           new Notice(`Gespeichert: ${this.title.trim() || "Rezept"}`);
           this.close();
+          if (saved && this.opts.afterSave) {
+            const afterSave = this.opts.afterSave;
+            const originals = this.originals;
+            window.setTimeout(() => {
+              void afterSave(saved, originals, draft);
+            }, 80);
+          }
         } catch (err) {
           this.error = err instanceof Error ? err.message : String(err);
           this.busy = false;
