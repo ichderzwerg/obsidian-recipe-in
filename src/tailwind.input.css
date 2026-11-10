@@ -2270,3 +2270,25 @@ select.rg-order-select.filtered {
   margin: 0 0 12px;
   color: var(--text-muted);
 }
+
+/* format warning above the note preview */
+.recipe-import-warning {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--text-warning, #d08b00);
+  border-radius: 4px;
+  background: var(--background-secondary);
+  font-size: 0.9em;
+}
+.recipe-import-warning strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.recipe-import-warning ul {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+}
+.recipe-import-warning p {
+  margin: 0;
+  color: var(--text-muted);
+}

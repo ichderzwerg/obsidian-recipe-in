@@ -64,6 +64,8 @@ REGELN
    Zwischen Menge und Einheit immer ein Prozentzeichen.
 2. Nach einer schließenden Klammer IMMER ein Leerzeichen: "@Thymian{1%EL} Blätter",
    nicht "@Thymian{1%EL}blättern".
+   Steht im Original eine Menge, MUSS sie in den Klammern stehen — leere Klammern
+   (@Mehl{}) sind nur erlaubt, wenn das Original wirklich keine Menge nennt.
 3. In den Klammern steht NUR Menge und Einheit, niemals ein Komma oder ein Zusatz:
    "@Hähnchen{1%Stück}", nicht "@Hähnchen{1%ganzes, ca. 1,6 kg}". Zusätze gehören in
    den Fließtext dahinter.
@@ -72,6 +74,8 @@ REGELN
 4. ingredients: deutsche Grundform, großgeschrieben, ohne Mengen und Zusätze.
    "2 große Zwiebeln, fein gewürfelt" wird zu [[Zwiebel]]. Keine Duplikate, keine Artikel.
 5. Kochgeschirr als #Pfanne{} / #Topf{} / #Ofen{}, Garzeiten als ~{35%min}.
+   Die Arbeitsschritte stehen als Fließtext. NIEMALS nummerierte Listen, niemals
+   Aufzählungszeichen, niemals "1." am Zeilenanfang.
 6. Abschnitte mit = Name = (ein Gleichheitszeichen je Seite, Leerzeichen davor und danach).
 7. Nichts erfinden: keine Mengen, Zeiten oder Zutaten ergänzen. Unklare Stellen weglassen.
    Formuliere die Schritte in eigenen Worten — übernimm keine längeren wörtlichen Passagen

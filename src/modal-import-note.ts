@@ -75,6 +75,44 @@ async function downscale(
   }
 }
 
+/**
+ * Cheap sanity check on the generated note, shown above the textarea.
+ *
+ * The failure modes that matter on a phone are exactly the ones you cannot
+ * easily fix there: ingredients without amounts, and steps that came back as a
+ * numbered list instead of prose. Both mean the model ignored the format, so
+ * the count is worth more than a silent save.
+ */
+function noteWarnings(note: string): string[] {
+  const warnings: string[] = [];
+  const body =
+    note
+      .split(/\n---\n/)
+      .slice(1)
+      .join("\n---\n") || note;
+
+  const empty = (body.match(/@[^@{}\n]+?\{\}/g) || []).length;
+  const withAmount = (body.match(/@[^@{}\n]+?\{[^}]+\}/g) || []).length;
+  if (empty >= 2 && empty >= Math.max(2, withAmount)) {
+    warnings.push(
+      `${empty} Zutaten ohne Menge — steht im Original eine Menge, gehört sie in die Klammern`,
+    );
+  }
+
+  const numbered = body
+    .split("\n")
+    .filter((line) => /^\s*\d+[.)]\s+/.test(line)).length;
+  if (numbered >= 2) {
+    warnings.push(`${numbered} nummerierte Zeilen statt Fließtext`);
+  }
+
+  if (!/^=\s+.+\s+=$/m.test(body)) {
+    warnings.push("keine Abschnitte (= Name =) gefunden");
+  }
+
+  return warnings;
+}
+
 function titleFromNote(note: string, fallback: string): string {
   const match = /^---[\s\S]*?^title:\s*(.+)$/m.exec(note);
   return (match?.[1] ?? fallback).trim().replace(/^["']|["']$/g, "");
@@ -287,6 +325,19 @@ export class ImportNoteModal extends Modal {
       text.setValue(this.title).onChange((value) => (this.title = value));
       text.inputEl.addClass("recipe-vault-input-full");
     });
+
+    const warnings = noteWarnings(draft.note);
+    if (warnings.length) {
+      const box = contentEl.createDiv({ cls: "recipe-import-warning" });
+      box.createEl("strong", {
+        text: "Das sieht nach einem Formatfehler aus:",
+      });
+      const list = box.createEl("ul");
+      for (const warning of warnings) list.createEl("li", { text: warning });
+      box.createEl("p", {
+        text: "Meist heißt das: das Modell war zu schwach für die Seite. Nochmal versuchen, oder in den Einstellungen ein anderes Modell wählen.",
+      });
+    }
 
     const area = contentEl.createEl("textarea", {
       cls: "recipe-import-note-input",
