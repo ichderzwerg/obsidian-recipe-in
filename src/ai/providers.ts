@@ -308,7 +308,32 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
 }
 
 /** Send one request and return the model's text. Throws with a readable message. */
+/**
+ * Hard ceiling for one import: retries, fallback and a stalled socket can each
+ * take the per-attempt limit, so without this the dialog could spin forever.
+ */
 export async function generateText(
+  cfg: AIConfig,
+  req: AIRequest,
+): Promise<string> {
+  const watchdogs = Math.max(cfg.timeoutMs, 5000) * 4;
+  const watchdog = new Promise<never>((_resolve, reject) => {
+    window.setTimeout(
+      () =>
+        reject(
+          new AIHttpError(
+            0,
+            `Abbruch nach ${Math.round(watchdogs / 1000)} s — der Anbieter antwortet nicht. ` +
+              "Bitte erneut versuchen; bei Wiederholung Modell oder Anbieter wechseln.",
+          ),
+        ),
+      watchdogs,
+    );
+  });
+  return Promise.race([generateTextInner(cfg, req), watchdog]);
+}
+
+async function generateTextInner(
   cfg: AIConfig,
   req: AIRequest,
 ): Promise<string> {
