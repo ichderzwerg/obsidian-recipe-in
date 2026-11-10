@@ -115,7 +115,7 @@ async function callOpenAI(cfg: AIConfig, req: AIRequest): Promise<string> {
         { role: "user", content: userContent },
       ],
       // Recipes are long; without a cap the JSON/text can be cut mid-way.
-      max_tokens: 8000,
+      max_tokens: 16000,
       temperature: 0.2,
     }),
     throw: false,
@@ -141,7 +141,14 @@ async function callOpenAI(cfg: AIConfig, req: AIRequest): Promise<string> {
   const choice = payload?.choices?.[0];
   const content = choice?.message?.content;
   if (!content?.trim()) {
-    throw new Error("Der Anbieter hat eine leere Antwort geliefert.");
+    console.warn(
+      "recipe-in: leere Antwort",
+      JSON.stringify(payload).slice(0, 600),
+    );
+    throw new AIHttpError(
+      599,
+      "Der Anbieter hat eine leere Antwort geliefert.",
+    );
   }
   if (choice?.finish_reason === "length") {
     throw new Error(
@@ -171,7 +178,7 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
       contents: [{ role: "user", parts }],
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 8192,
+        maxOutputTokens: 32768,
         ...(cfg.thinking === false
           ? { thinkingConfig: { thinkingBudget: 0 } }
           : {}),
@@ -183,9 +190,15 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
   const payload = response.json as
     | {
         candidates?: Array<{
-          content?: { parts?: Array<{ text?: string }> };
+          content?: { parts?: Array<{ text?: string; thought?: boolean }> };
           finishReason?: string;
         }>;
+        promptFeedback?: { blockReason?: string };
+        usageMetadata?: {
+          candidatesTokenCount?: number;
+          thoughtsTokenCount?: number;
+          promptTokenCount?: number;
+        };
         error?: { message?: string };
       }
     | undefined;
@@ -197,15 +210,55 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
     );
   }
 
+  const blocked = payload?.promptFeedback?.blockReason;
+  if (blocked) {
+    throw new AIHttpError(
+      400,
+      `Gemini hat die Anfrage blockiert (${blocked}). Bei Fotos oft ein zu großer oder unleserlicher Ausschnitt.`,
+    );
+  }
+
   const candidate = payload?.candidates?.[0];
+  const finish = candidate?.finishReason ?? "";
   const content = (candidate?.content?.parts ?? [])
+    .filter((part) => !part.thought)
     .map((part) => part.text ?? "")
     .join("");
+
   if (!content.trim()) {
-    throw new Error("Gemini hat eine leere Antwort geliefert.");
+    const usage = payload?.usageMetadata ?? {};
+    const detail =
+      `finishReason=${finish || "?"}, ` +
+      `out=${usage.candidatesTokenCount ?? 0}, ` +
+      `thoughts=${usage.thoughtsTokenCount ?? 0}, ` +
+      `in=${usage.promptTokenCount ?? 0}`;
+
+    // 599 = transient: worth one retry and the fallback model.
+    if (finish === "MAX_TOKENS") {
+      throw new AIHttpError(
+        599,
+        `Das Ausgabelimit war erreicht, bevor die Notiz fertig war (${detail}). Nimm weniger Fotos auf einmal.`,
+      );
+    }
+    if (finish === "SAFETY" || finish === "RECITATION") {
+      throw new AIHttpError(
+        400,
+        `Gemini hat die Antwort gestoppt (${finish}). Versuche ein anderes Foto.`,
+      );
+    }
+    console.warn(
+      "recipe-in: leere Gemini-Antwort",
+      JSON.stringify(payload).slice(0, 600),
+    );
+    throw new AIHttpError(
+      599,
+      `Gemini hat eine leere Antwort geliefert (${detail}).`,
+    );
   }
-  if (candidate?.finishReason === "MAX_TOKENS") {
-    throw new Error(
+
+  if (finish === "MAX_TOKENS") {
+    throw new AIHttpError(
+      599,
       "Die Antwort war zu lang für das Modell. Nimm weniger Fotos auf einmal.",
     );
   }
