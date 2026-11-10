@@ -1288,10 +1288,6 @@ export default class RecipeVault extends Plugin {
       callback: () => this.openImportModal("photo"),
     });
 
-    // Import-only build: drop the gallery, cook mode, shopping list,
-    // nutrition and bulk-import commands once they exist.
-    this.app.workspace.onLayoutReady(() => this.stripNonImportCommands());
-
     // Command to increment times_made on the active recipe file
     this.addCommand({
       id: c.CMD_MARK_MADE,
@@ -1665,6 +1661,9 @@ export default class RecipeVault extends Plugin {
         reindexRecipe(file);
       }),
     );
+    // Import-only build: everything registered above that isn't an import
+    // command is removed here, once, after all registrations have run.
+    this.stripNonImportCommands();
   }
 
   onunload() {

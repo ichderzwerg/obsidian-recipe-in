@@ -40,6 +40,16 @@ function trimBase(url: string, fallback: string): string {
   return value.replace(/\/+$/, "");
 }
 
+class AIHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AIHttpError";
+  }
+}
+
 function errorMessage(status: number, detail?: string): string {
   if (status === 401 || status === 403) {
     return "Der API-Schlüssel wurde abgelehnt. Prüfe Anbieter, Schlüssel und Modell in den Einstellungen.";
@@ -116,7 +126,10 @@ async function callOpenAI(cfg: AIConfig, req: AIRequest): Promise<string> {
     | undefined;
 
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(errorMessage(response.status, payload?.error?.message));
+    throw new AIHttpError(
+      response.status,
+      errorMessage(response.status, payload?.error?.message),
+    );
   }
 
   const choice = payload?.choices?.[0];
@@ -166,7 +179,10 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
     | undefined;
 
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(errorMessage(response.status, payload?.error?.message));
+    throw new AIHttpError(
+      response.status,
+      errorMessage(response.status, payload?.error?.message),
+    );
   }
 
   const candidate = payload?.candidates?.[0];
@@ -206,7 +222,24 @@ export async function generateText(
   });
 
   const call = cfg.provider === "gemini" ? callGemini : callOpenAI;
-  return Promise.race([call(cfg, req), timeout]);
+
+  // Transient overload (503) and rate limits are common on the free tiers;
+  // retry twice with a short backoff before surfacing the error.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await Promise.race([call(cfg, req), timeout]);
+    } catch (error) {
+      lastError = error;
+      const status = error instanceof AIHttpError ? error.status : 0;
+      const retryable = status === 429 || status >= 500;
+      if (!retryable || attempt === 2) break;
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, 3000 * (attempt + 1)),
+      );
+    }
+  }
+  throw lastError;
 }
 
 /** Strip a ```markdown fence the model may have wrapped the note in. */
