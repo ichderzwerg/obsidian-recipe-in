@@ -166,7 +166,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     id: "mistral",
-    label: "Mistral (Free/Experiment-Tier, ohne Karte)",
+    label: "Mistral (nur mit Abrechnung — Free-Tier ohne API-Schlüssel)",
     provider: "openai",
     baseUrl: "https://api.mistral.ai/v1",
     model: "mistral-small-latest",
