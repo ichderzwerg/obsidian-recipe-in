@@ -165,6 +165,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     model: "qwen/qwen3.8-27b",
   },
   {
+    id: "mistral",
+    label: "Mistral (Free/Experiment-Tier, ohne Karte)",
+    provider: "openai",
+    baseUrl: "https://api.mistral.ai/v1",
+    model: "mistral-small-latest",
+  },
+  {
     id: "openrouter",
     label: "OpenRouter",
     provider: "openai",
@@ -195,6 +202,7 @@ export function currentPreset(s: {
   if (s.aiProvider === "gemini") return "gemini";
   const base = (s.aiBaseUrl || "").replace(/\/+$/, "");
   if (base === "https://api.groq.com/openai/v1") return "groq";
+  if (base === "https://api.mistral.ai/v1") return "mistral";
   if (base === "https://openrouter.ai/api/v1") return "openrouter";
   if (
     base.startsWith("http://localhost:11434") ||
