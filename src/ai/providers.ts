@@ -31,14 +31,28 @@ export interface AIRequest {
   text: string;
   /** Base64 data URLs ("data:image/png;base64,..."), one per page. */
   images?: string[];
+  /** Override the default 0.2 — paraphrasing needs more freedom. */
+  temperature?: number;
 }
 
 export const DEFAULT_OPENAI_BASE = "https://openrouter.ai/api/v1";
 export const DEFAULT_GEMINI_BASE =
   "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
-/** Used when the main Gemini model is overloaded or rate-limited. */
-export const DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite";
+
+/** Appended on the retry after a RECITATION stop. */
+export const PARAPHRASE_HINT = `
+
+WICHTIG — zweiter Versuch: Der vorherige Versuch wurde als zu wörtliche Wiedergabe
+abgelehnt. Formuliere alle Sätze jetzt in eigenen Worten um. Übernimm keine längeren
+wörtlichen Passagen aus der Vorlage, keine zusammenhängenden Sätze, keine Überschriften
+daraus. Zutaten, Mengen, Einheiten und die Reihenfolge der Schritte bleiben exakt gleich.`;
+/**
+ * Used when the main Gemini model is overloaded or rate-limited. The `-latest`
+ * alias tracks whatever lite model is currently serving, which is far less
+ * likely to be the one that just answered 503.
+ */
+export const DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest";
 export const DEFAULT_OPENAI_MODEL = "google/gemini-3.5-flash-lite";
 
 function trimBase(url: string, fallback: string): string {
@@ -50,6 +64,10 @@ class AIHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Machine-readable cause, e.g. "recitation" — drives the retry strategy. */
+    readonly kind?: "recitation" | "safety" | "max_tokens" | "empty",
+    /** Server-suggested wait before retrying, when the API sends one. */
+    readonly retryDelayMs?: number,
   ) {
     super(message);
     this.name = "AIHttpError";
@@ -116,7 +134,7 @@ async function callOpenAI(cfg: AIConfig, req: AIRequest): Promise<string> {
       ],
       // Recipes are long; without a cap the JSON/text can be cut mid-way.
       max_tokens: 16000,
-      temperature: 0.2,
+      temperature: req.temperature ?? 0.2,
     }),
     throw: false,
   });
@@ -177,7 +195,7 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
       systemInstruction: { parts: [{ text: req.system }] },
       contents: [{ role: "user", parts }],
       generationConfig: {
-        temperature: 0.2,
+        temperature: req.temperature ?? 0.2,
         maxOutputTokens: 32768,
         ...(cfg.thinking === false
           ? { thinkingConfig: { thinkingBudget: 0 } }
@@ -199,14 +217,22 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
           thoughtsTokenCount?: number;
           promptTokenCount?: number;
         };
-        error?: { message?: string };
+        error?: {
+          message?: string;
+          details?: Array<{ retryDelay?: string }>;
+        };
       }
     | undefined;
 
   if (response.status < 200 || response.status >= 300) {
+    const delay = (payload?.error?.details ?? [])
+      .map((detail) => /^(\d+(?:\.\d+)?)s$/.exec(detail.retryDelay ?? ""))
+      .find((match) => match !== null);
     throw new AIHttpError(
       response.status,
       errorMessage(response.status, payload?.error?.message),
+      undefined,
+      delay ? Math.round(parseFloat(delay[1]) * 1000) : undefined,
     );
   }
 
@@ -238,12 +264,27 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
       throw new AIHttpError(
         599,
         `Das Ausgabelimit war erreicht, bevor die Notiz fertig war (${detail}). Nimm weniger Fotos auf einmal.`,
+        "max_tokens",
       );
     }
-    if (finish === "SAFETY" || finish === "RECITATION") {
+    if (finish === "RECITATION") {
+      // The model reproduced the source too literally. Retried once below
+      // with a paraphrase instruction — that almost always gets through.
+      console.warn(
+        "recipe-in: recitation",
+        JSON.stringify(payload).slice(0, 400),
+      );
       throw new AIHttpError(
         400,
-        `Gemini hat die Antwort gestoppt (${finish}). Versuche ein anderes Foto.`,
+        `Gemini hat die Antwort als zu wörtliche Wiedergabe gestoppt (${detail}).`,
+        "recitation",
+      );
+    }
+    if (finish === "SAFETY") {
+      throw new AIHttpError(
+        400,
+        `Gemini hat die Antwort aus Sicherheitsgründen gestoppt (${detail}).`,
+        "safety",
       );
     }
     console.warn(
@@ -253,6 +294,7 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
     throw new AIHttpError(
       599,
       `Gemini hat eine leere Antwort geliefert (${detail}).`,
+      "empty",
     );
   }
 
@@ -283,7 +325,10 @@ export async function generateText(
   const limit = Math.max(cfg.timeoutMs, 5000);
 
   /** One attempt, with its own timer — retries must not eat the budget. */
-  const once = (config: AIConfig): Promise<string> => {
+  const once = (
+    config: AIConfig,
+    request: AIRequest = req,
+  ): Promise<string> => {
     const timeout = new Promise<never>((_resolve, reject) => {
       window.setTimeout(
         () =>
@@ -297,7 +342,7 @@ export async function generateText(
         limit,
       );
     });
-    return Promise.race([call(config, req), timeout]);
+    return Promise.race([call(config, request), timeout]);
   };
 
   // Transient overload (503) and per-minute quotas are normal on the free
@@ -311,16 +356,41 @@ export async function generateText(
       const status = error instanceof AIHttpError ? error.status : 0;
       const retryable = status === 429 || status >= 500;
       if (!retryable || attempt === 2) break;
+      const suggested =
+        error instanceof AIHttpError && error.retryDelayMs
+          ? error.retryDelayMs
+          : 0;
+      const base = status === 429 ? 6000 : 3000;
       await new Promise((resolve) =>
-        window.setTimeout(resolve, 3000 * (attempt + 1)),
+        window.setTimeout(resolve, suggested || base * (attempt + 1)),
       );
+    }
+  }
+
+  // "Recitation" means the model reproduced the source too closely. Asking it
+  // to paraphrase — in its own words, at a higher temperature — usually passes,
+  // and the facts (quantities, order) stay the same.
+  if (lastError instanceof AIHttpError && lastError.kind === "recitation") {
+    try {
+      return await once(cfg, {
+        ...req,
+        system: req.system + PARAPHRASE_HINT,
+        temperature: 0.8,
+      });
+    } catch (error) {
+      lastError = error;
     }
   }
 
   const fallback = (cfg.fallbackModel ?? "").trim();
   if (fallback && fallback !== cfg.model) {
     try {
-      return await once({ ...cfg, model: fallback });
+      return await once(
+        { ...cfg, model: fallback },
+        lastError instanceof AIHttpError && lastError.kind === "recitation"
+          ? { ...req, system: req.system + PARAPHRASE_HINT, temperature: 0.8 }
+          : req,
+      );
     } catch (error) {
       lastError = error;
     }

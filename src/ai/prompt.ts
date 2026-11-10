@@ -74,6 +74,8 @@ REGELN
 5. Kochgeschirr als #Pfanne{} / #Topf{} / #Ofen{}, Garzeiten als ~{35%min}.
 6. Abschnitte mit = Name = (ein Gleichheitszeichen je Seite, Leerzeichen davor und danach).
 7. Nichts erfinden: keine Mengen, Zeiten oder Zutaten ergänzen. Unklare Stellen weglassen.
+   Formuliere die Schritte in eigenen Worten — übernimm keine längeren wörtlichen Passagen
+   aus der Vorlage. Zutaten, Mengen und Reihenfolge bleiben dabei exakt.
 8. servings ist eine ganze Zahl. Fehlt die Angabe, schätze sie aus den Mengen.
 9. cuisine/type nur füllen, wenn erkennbar; sonst leere Liste ([]).
 10. title ist der reine Gerichtename, ohne Jahr, Blogname oder Werbefloskeln.
