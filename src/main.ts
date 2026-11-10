@@ -37,6 +37,7 @@ import {
   generateText,
   stripFence,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_FALLBACK_MODEL,
   DEFAULT_OPENAI_MODEL,
   type AIConfig,
 } from "./ai/providers";
@@ -2946,7 +2947,12 @@ export default class RecipeVault extends Plugin {
       apiKey: (s.aiApiKey ?? "").trim(),
       baseUrl: (s.aiBaseUrl ?? "").trim(),
       model: this.importModel(),
-      timeoutMs: Math.max(s.aiTimeoutMs ?? 45000, 5000),
+      timeoutMs: Math.max(s.aiTimeoutMs ?? 90000, 15000),
+      thinking: s.aiThinking !== false,
+      // Free-tier Flash models answer 503/429 in bursts; one cheap second
+      // model turns "try again later" into a slow but successful import.
+      fallbackModel:
+        s.aiProvider === "gemini" ? DEFAULT_GEMINI_FALLBACK_MODEL : "",
     };
   }
 

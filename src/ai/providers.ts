@@ -20,6 +20,10 @@ export interface AIConfig {
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  /** Gemini only: allow internal reasoning (slower, tighter format). Default on. */
+  thinking?: boolean;
+  /** Tried once if the main model answers 429/5xx after its retries. */
+  fallbackModel?: string;
 }
 
 export interface AIRequest {
@@ -33,6 +37,8 @@ export const DEFAULT_OPENAI_BASE = "https://openrouter.ai/api/v1";
 export const DEFAULT_GEMINI_BASE =
   "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+/** Used when the main Gemini model is overloaded or rate-limited. */
+export const DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite";
 export const DEFAULT_OPENAI_MODEL = "google/gemini-3.5-flash-lite";
 
 function trimBase(url: string, fallback: string): string {
@@ -163,7 +169,13 @@ async function callGemini(cfg: AIConfig, req: AIRequest): Promise<string> {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: req.system }] },
       contents: [{ role: "user", parts }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 8192 },
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 8192,
+        ...(cfg.thinking === false
+          ? { thinkingConfig: { thinkingBudget: 0 } }
+          : {}),
+      },
     }),
     throw: false,
   });
@@ -214,21 +226,33 @@ export async function generateText(
     throw new Error("Keine Modell-ID gesetzt (Einstellungen → Rezept-Import).");
   }
 
-  const timeout = new Promise<never>((_resolve, reject) => {
-    window.setTimeout(
-      () => reject(new Error("Zeitüberschreitung bei der KI-Anfrage.")),
-      Math.max(cfg.timeoutMs, 5000),
-    );
-  });
-
   const call = cfg.provider === "gemini" ? callGemini : callOpenAI;
+  const limit = Math.max(cfg.timeoutMs, 5000);
 
-  // Transient overload (503) and rate limits are common on the free tiers;
-  // retry twice with a short backoff before surfacing the error.
+  /** One attempt, with its own timer — retries must not eat the budget. */
+  const once = (config: AIConfig): Promise<string> => {
+    const timeout = new Promise<never>((_resolve, reject) => {
+      window.setTimeout(
+        () =>
+          reject(
+            new AIHttpError(
+              0,
+              `Zeitüberschreitung nach ${Math.round(limit / 1000)} s. ` +
+                "Große Fotos brauchen länger — verkleinern oder das Zeitlimit in den Einstellungen erhöhen.",
+            ),
+          ),
+        limit,
+      );
+    });
+    return Promise.race([call(config, req), timeout]);
+  };
+
+  // Transient overload (503) and per-minute quotas are normal on the free
+  // tiers; retry twice, then fall back to a second model if one is configured.
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await Promise.race([call(cfg, req), timeout]);
+      return await once(cfg);
     } catch (error) {
       lastError = error;
       const status = error instanceof AIHttpError ? error.status : 0;
@@ -239,6 +263,16 @@ export async function generateText(
       );
     }
   }
+
+  const fallback = (cfg.fallbackModel ?? "").trim();
+  if (fallback && fallback !== cfg.model) {
+    try {
+      return await once({ ...cfg, model: fallback });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
   throw lastError;
 }
 

@@ -56,7 +56,18 @@ next to the upstream `recipe-vault` without collisions.
   Ollama = `http://localhost:11434/v1`
 - **Modell** — blank = `gemini-3.6-flash` (Gemini) / `google/gemini-3.5-flash-lite` (OpenAI)
 - **Zielsprache** — language of the finished note (default `Deutsch`)
+- **Denkzeit (Gemini)** — on = model reasons first (slower, tighter Cooklang);
+  off ≈ twice as fast, slightly looser format
+- **AI request timeout (ms)** — per attempt, default 90 000
 - **Recipe save folder** — where notes land (`Recipes` by default)
+
+## Resilience
+
+- Each attempt gets its own timeout, so a retry never eats the previous budget.
+- 429/5xx are retried twice with backoff, then one fallback model is tried
+  (`gemini-3.1-flash-lite`), turning "overloaded, try later" into a slow success.
+- Photos are downscaled to 1600 px / JPEG 0.85 in the dialog before upload — a 4 MB
+  phone picture becomes a few hundred KB, which also cuts token cost.
 
 ## Known limits
 

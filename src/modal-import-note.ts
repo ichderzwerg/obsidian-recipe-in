@@ -36,6 +36,38 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/**
+ * Shrink a photo before it leaves the device: a 4 MB phone picture is slow to
+ * upload and costs tokens for no extra legibility. 1600 px on the long edge is
+ * still well above what a vision model needs for a cookbook page.
+ */
+async function downscale(
+  src: string,
+  maxEdge = 1600,
+  quality = 0.85,
+): Promise<string> {
+  try {
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("decode failed"));
+      image.src = src;
+    });
+    const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
+    if (scale > 0.95) return src;
+
+    const canvas = activeDocument.createElement("canvas");
+    canvas.width = Math.round(image.width * scale);
+    canvas.height = Math.round(image.height * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return src;
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", quality);
+  } catch {
+    return src;
+  }
+}
+
 function titleFromNote(note: string, fallback: string): string {
   const match = /^---[\s\S]*?^title:\s*(.+)$/m.exec(note);
   return (match?.[1] ?? fallback).trim().replace(/^["']|["']$/g, "");
@@ -157,7 +189,16 @@ export class ImportNoteModal extends Modal {
       const files = Array.from(input.files ?? []);
       void (async () => {
         for (const file of files) {
-          this.images.push(await readFileAsDataUrl(file));
+          const raw = await readFileAsDataUrl(file);
+          this.images.push(await downscale(raw));
+        }
+        if (files.length) {
+          const kb = Math.round(
+            this.images[this.images.length - 1].length / 1024,
+          );
+          new Notice(
+            `${files.length} Bild(er) vorbereitet (~${kb} KB übertragen)`,
+          );
         }
         this.render();
       })();

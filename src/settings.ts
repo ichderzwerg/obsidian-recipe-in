@@ -66,6 +66,8 @@ export interface PluginSettings {
   importModel: string;
   /** Language the finished note is written in. */
   targetLanguage: string;
+  /** Gemini: let the model reason before answering (slower, tighter format). */
+  aiThinking: boolean;
   openRouterApiKey: string;
   aiModelPreset: string;
   aiCustomModelId: string;
@@ -159,11 +161,12 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   aiBaseUrl: "",
   importModel: "",
   targetLanguage: "Deutsch",
+  aiThinking: true,
   openRouterApiKey: "",
   aiModelPreset: DEFAULT_AI_MODEL,
   aiCustomModelId: "",
   aiModelId: DEFAULT_AI_MODEL,
-  aiTimeoutMs: 45000,
+  aiTimeoutMs: 90000,
   aiSystemPrompt: "",
   useBuiltInFillerWords: true,
   extraFillerWords: "",
@@ -794,6 +797,21 @@ export class SettingsTab extends PluginSettingTab {
                 await this.plugin.saveSettings();
               });
             text.inputEl.addClass("recipe-vault-input-full");
+          });
+        },
+      },
+      {
+        name: "Denkzeit (Gemini)",
+        desc: "An: das Modell überlegt vor der Antwort — langsamer, aber strenger im Format. Aus: rund doppelt so schnell.",
+        visible: () => this.plugin.settings.aiProvider === "gemini",
+        render: (setting) => {
+          setting.addToggle((toggle) => {
+            toggle
+              .setValue(this.plugin.settings.aiThinking)
+              .onChange(async (value) => {
+                this.plugin.settings.aiThinking = value;
+                await this.plugin.saveSettings();
+              });
           });
         },
       },

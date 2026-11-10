@@ -64,6 +64,9 @@ REGELN
    Zwischen Menge und Einheit immer ein Prozentzeichen.
 2. Nach einer schließenden Klammer IMMER ein Leerzeichen: "@Thymian{1%EL} Blätter",
    nicht "@Thymian{1%EL}blättern".
+3. In den Klammern steht NUR Menge und Einheit, niemals ein Komma oder ein Zusatz:
+   "@Hähnchen{1%Stück}", nicht "@Hähnchen{1%ganzes, ca. 1,6 kg}". Zusätze gehören in
+   den Fließtext dahinter.
 3. Jede Zutat aus dem Frontmatter muss im Text mindestens einmal als @Zutat stehen —
    genau einmal mit Menge, weitere Erwähnungen ohne Klammern.
 4. ingredients: deutsche Grundform, großgeschrieben, ohne Mengen und Zusätze.
