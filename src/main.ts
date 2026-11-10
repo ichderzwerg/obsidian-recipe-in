@@ -3141,9 +3141,7 @@ export default class RecipeVault extends Plugin {
     const s = this.settings;
     const custom = (s.importModel ?? "").trim();
     if (custom) return custom;
-    return s.aiProvider === "gemini"
-      ? DEFAULT_GEMINI_MODEL
-      : DEFAULT_OPENAI_MODEL;
+    return settings.defaultImportModel(s.aiProvider, s.aiBaseUrl);
   }
 
   private todayIso(): string {

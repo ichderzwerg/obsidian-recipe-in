@@ -18,6 +18,7 @@ import {
 } from "@recipe-vault/core";
 import RecipeVault from "./main";
 import * as c from "./constants";
+import { DEFAULT_GEMINI_MODEL, DEFAULT_OPENAI_MODEL } from "./ai/providers";
 
 export interface PluginSettings {
   /**
@@ -120,6 +121,22 @@ export interface ProviderPreset {
   provider: "gemini" | "openai";
   baseUrl: string;
   model: string;
+}
+
+/**
+ * The model used when the field is empty.
+ *
+ * It has to follow the *endpoint*, not just the wire format: an empty model on
+ * a Groq base URL used to fall back to an OpenRouter-style Gemini id, which
+ * Groq answers with 404 (or, worse, a model nobody meant to pick).
+ */
+export function defaultImportModel(provider: string, baseUrl: string): string {
+  if (provider === "gemini") return DEFAULT_GEMINI_MODEL;
+  const base = (baseUrl || "").toLowerCase();
+  if (base.includes("groq.com")) return "qwen/qwen3.8-27b";
+  if (base.includes("mistral.ai")) return "mistral-small-latest";
+  if (base.includes("11434")) return "qwen3-vl:8b";
+  return DEFAULT_OPENAI_MODEL;
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -956,9 +973,10 @@ export class SettingsTab extends PluginSettingTab {
           setting.addText((text) => {
             text
               .setPlaceholder(
-                this.plugin.settings.aiProvider === "gemini"
-                  ? "gemini-3.6-flash"
-                  : "google/gemini-3.5-flash-lite",
+                defaultImportModel(
+                  this.plugin.settings.aiProvider,
+                  this.plugin.settings.aiBaseUrl,
+                ),
               )
               .setValue(this.plugin.settings.importModel)
               .onChange(async (value) => {
