@@ -1,10 +1,10 @@
 {
-	"id": "recipe-vault",
-	"name": "Recipe Vault",
-	"version": "1.4.1",
-	"minAppVersion": "1.7.2",
-	"description": "Import recipes from web pages, browse them in a gallery, and build shopping lists.",
-	"author": "Taylor Dugger",
-	"authorUrl": "https://github.com/taylorsdugger",
-	"isDesktopOnly": false
+  "id": "recipe-in",
+  "name": "Recipe In (import only)",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.2",
+  "description": "Import recipes from a URL or a photo into German Cooklang notes. Import-only fork of Recipe Vault.",
+  "author": "idzmac",
+  "authorUrl": "https://github.com/taylorsdugger",
+  "isDesktopOnly": false
 }

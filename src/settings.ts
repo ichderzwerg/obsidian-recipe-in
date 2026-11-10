@@ -56,6 +56,16 @@ export interface PluginSettings {
   recipeGalleryFolder: string;
   /** Off hides Ask AI, Add recipe from photo, and the AI settings. */
   aiFeatures: boolean;
+  /** Which wire format the import uses. */
+  aiProvider: "gemini" | "openai";
+  /** Key for the chosen provider (Gemini AQ./AIza… or an OpenAI-compatible key). */
+  aiApiKey: string;
+  /** Base URL for OpenAI-compatible endpoints; blank = OpenRouter. */
+  aiBaseUrl: string;
+  /** Model id for imports; blank = the provider's default. */
+  importModel: string;
+  /** Language the finished note is written in. */
+  targetLanguage: string;
   openRouterApiKey: string;
   aiModelPreset: string;
   aiCustomModelId: string;
@@ -97,6 +107,33 @@ export const LEGACY_AI_MODEL_PRESETS: Record<string, string> = {
 
 const AI_MODEL_OTHER = "__other__";
 
+/**
+ * Import-only build: settings that belong to the gallery, cook mode, shopping
+ * list and the old Ask-AI path are hidden rather than deleted, so this file
+ * stays mergeable with upstream.
+ */
+const HIDDEN_IN_IMPORT_ONLY = new Set<string>([
+  "Recipe layout on small screens",
+  "Show nutrition",
+  "Show Cook button",
+  "Collapse properties on recipes",
+  "Save new recipes as",
+  "Save in currently opened file",
+  "Template file",
+  "Recipe template",
+  "Shopping list file",
+  "Recipe gallery folder",
+  "AI features",
+  "AI model ID",
+  "Custom AI system prompt",
+  "Remove filler words from titles",
+  "Filler words to keep",
+  "Extra filler words",
+  "Filter vegan words",
+  "Filter gluten-free words",
+  "Recipe language",
+]);
+
 export const DEFAULT_SETTINGS: PluginSettings = {
   mobileRecipeLayout: "classic",
   collapseRecipeProperties: true,
@@ -117,6 +154,11 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   shoppingListFile: "Shopping List.md",
   recipeGalleryFolder: "",
   aiFeatures: true,
+  aiProvider: "gemini",
+  aiApiKey: "",
+  aiBaseUrl: "",
+  importModel: "",
+  targetLanguage: "Deutsch",
   openRouterApiKey: "",
   aiModelPreset: DEFAULT_AI_MODEL,
   aiCustomModelId: "",
@@ -262,6 +304,7 @@ export class SettingsTab extends PluginSettingTab {
     containerEl.addClass("settingsTemplate");
 
     for (const row of this.rows()) {
+      if (HIDDEN_IN_IMPORT_ONLY.has(row.name)) continue;
       if (row.visible && !row.visible()) continue;
       const setting = new Setting(containerEl).setName(row.name);
       if (row.desc) setting.setDesc(row.desc);
@@ -662,6 +705,99 @@ export class SettingsTab extends PluginSettingTab {
         },
       },
       {
+        name: "KI-Anbieter",
+        desc: "Gemini nutzt die native Google-API (nötig für AQ.-Schlüssel). OpenAI-kompatibel deckt OpenRouter, Ollama, LM Studio, llama.cpp, Groq und ähnliche ab.",
+        render: (setting) => {
+          setting.addDropdown((dropdown) => {
+            dropdown
+              .addOption("gemini", "Google Gemini (AI Studio)")
+              .addOption("openai", "OpenAI-kompatibel (OpenRouter, Ollama, …)")
+              .setValue(this.plugin.settings.aiProvider)
+              .onChange(async (value) => {
+                this.plugin.settings.aiProvider =
+                  value === "openai" ? "openai" : "gemini";
+                await this.plugin.saveSettings();
+                this.refresh();
+              });
+          });
+        },
+      },
+      {
+        name: "API-Schlüssel",
+        desc: "Wird als Klartext in dieser Vault-Konfiguration gespeichert. Bei Ollama lokal leer lassen.",
+        render: (setting) => {
+          setting.addText((text) => {
+            text
+              .setPlaceholder(
+                this.plugin.settings.aiProvider === "gemini"
+                  ? "AQ.Ab… oder AIza…"
+                  : "sk-or-v1-… / ollama",
+              )
+              .setValue(this.plugin.settings.aiApiKey)
+              .onChange(async (value) => {
+                this.plugin.settings.aiApiKey = value.trim();
+                await this.plugin.saveSettings();
+              });
+            text.inputEl.type = "password";
+            text.inputEl.autocomplete = "off";
+            text.inputEl.addClass("recipe-vault-input-full");
+          });
+        },
+      },
+      {
+        name: "Basis-URL",
+        desc: "Nur für OpenAI-kompatibel. Leer = OpenRouter. Ollama: http://localhost:11434/v1",
+        visible: () => this.plugin.settings.aiProvider === "openai",
+        render: (setting) => {
+          setting.addText((text) => {
+            text
+              .setPlaceholder("https://openrouter.ai/api/v1")
+              .setValue(this.plugin.settings.aiBaseUrl)
+              .onChange(async (value) => {
+                this.plugin.settings.aiBaseUrl = value.trim();
+                await this.plugin.saveSettings();
+              });
+            text.inputEl.addClass("recipe-vault-input-full");
+          });
+        },
+      },
+      {
+        name: "Modell",
+        desc: "Leer lassen für den Standard des Anbieters (Gemini: gemini-3.6-flash, OpenAI-kompatibel: google/gemini-3.5-flash-lite).",
+        render: (setting) => {
+          setting.addText((text) => {
+            text
+              .setPlaceholder(
+                this.plugin.settings.aiProvider === "gemini"
+                  ? "gemini-3.6-flash"
+                  : "google/gemini-3.5-flash-lite",
+              )
+              .setValue(this.plugin.settings.importModel)
+              .onChange(async (value) => {
+                this.plugin.settings.importModel = value.trim();
+                await this.plugin.saveSettings();
+              });
+            text.inputEl.addClass("recipe-vault-input-full");
+          });
+        },
+      },
+      {
+        name: "Zielsprache",
+        desc: "In dieser Sprache wird die Notiz geschrieben, auch wenn das Original anders ist.",
+        render: (setting) => {
+          setting.addText((text) => {
+            text
+              .setPlaceholder("Deutsch")
+              .setValue(this.plugin.settings.targetLanguage)
+              .onChange(async (value) => {
+                this.plugin.settings.targetLanguage = value.trim();
+                await this.plugin.saveSettings();
+              });
+            text.inputEl.addClass("recipe-vault-input-full");
+          });
+        },
+      },
+      {
         name: "AI features",
         desc: "Ask AI on recipe notes and Add recipe from photo. Turn this off to hide both, along with the AI settings below.",
         render: (setting) => {
@@ -678,9 +814,9 @@ export class SettingsTab extends PluginSettingTab {
         },
       },
       {
-        name: "OpenRouter API key",
-        desc: "Used for Ask AI recipe edits and Add recipe from photo. Stored in this vault config as plain text.",
-        visible: () => this.plugin.settings.aiFeatures,
+        name: "OpenRouter API key (alt)",
+        desc: "Nur für den alten Ask-AI-Pfad. Der Import nutzt den Schlüssel oben.",
+        visible: () => false,
         render: (setting) => {
           setting.addText((text) => {
             text

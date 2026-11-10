@@ -2114,3 +2114,55 @@ select.rg-order-select.filtered {
 	border-radius: 6px;
 	display: block;
 }
+
+/* --- import modal (import-only build) --------------------------------- */
+.recipe-import-modal {
+  width: min(720px, 92vw);
+}
+.recipe-import-modal .recipe-import-note-input {
+  width: 100%;
+  min-height: 320px;
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  font-family: var(--font-monospace);
+  font-size: 0.82em;
+  line-height: 1.45;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+.recipe-import-modal .recipe-import-error {
+  margin: 8px 0 0;
+  color: var(--text-error);
+  font-size: 0.9em;
+}
+.recipe-import-modal .photo-recipe-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.recipe-import-modal .photo-recipe-thumb {
+  position: relative;
+}
+.recipe-import-modal .photo-recipe-thumb img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+.recipe-import-modal .photo-recipe-thumb button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 50%;
+}

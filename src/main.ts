@@ -32,6 +32,15 @@ import {
   thumbPathForImage,
 } from "./utils/recipeLoader";
 import { PhotoRecipeModal } from "./modal-photo-recipe";
+import { ImportNoteModal, type NoteDraft } from "./modal-import-note";
+import {
+  generateText,
+  stripFence,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  type AIConfig,
+} from "./ai/providers";
+import { buildImportPrompt, buildTextImportPrompt } from "./ai/prompt";
 import { CookModeModal } from "./modal-cook";
 import {
   RecipeNoteLayout,
@@ -1255,94 +1264,33 @@ export default class RecipeVault extends Plugin {
       );
     }
 
-    // Ribbon icon to open/reveal the gallery
-    this.addRibbonIcon("utensils", "Open recipe gallery", () => {
-      void this.activateRecipeGalleryView();
-    });
-
-    // Command: open/reveal gallery
-    this.addCommand({
-      id: c.CMD_OPEN_RECIPE_GALLERY,
-      name: "Open recipe gallery",
-      callback: () => this.activateRecipeGalleryView(),
-    });
-
-    // This creates an icon in the left ribbon.
-    this.addRibbonIcon("chef-hat", "Import recipe", (evt: MouseEvent) => {
+    // Import-only build: a single ribbon icon and two import commands.
+    this.addRibbonIcon("chef-hat", "Rezept importieren", (evt: MouseEvent) => {
       const view = this.app.workspace.getActiveViewOfType(MarkdownView);
       const selection = view?.editor.getSelection()?.trim();
-      // try and make sure its a url
-      if (selection?.startsWith("http") && selection.split(" ").length === 1) {
-        void this.addRecipeToMarkdown(selection);
+      if (selection && /^https?:\/\/\S+$/.test(selection)) {
+        this.openImportModal("url", selection);
       } else {
-        new LoadRecipeModal(this.app, (recipeUrl) => {
-          void this.addRecipeToMarkdown(recipeUrl);
-        }).open();
+        this.openImportModal("url");
       }
     });
 
-    // This adds a simple command that can be triggered anywhere
     this.addCommand({
       id: c.CMD_OPEN_MODAL,
-      name: "Import recipe",
-      callback: () => {
-        new LoadRecipeModal(this.app, (recipeUrl) => {
-          void this.addRecipeToMarkdown(recipeUrl);
-        }).open();
-      },
+      name: "Rezept aus URL importieren",
+      callback: () => this.openImportModal("url"),
     });
 
-    // Import a recipe by photographing a cookbook page / recipe card. Uses the
-    // same OpenRouter path as Ask AI: the vision model does OCR + structured
-    // extraction in one call, then the user verifies before saving.
+    // Import-only build: one command for photos, same review step as URLs.
     this.addCommand({
       id: c.CMD_RECIPE_FROM_PHOTO,
-      name: "Add recipe from photo",
-      checkCallback: (checking) => {
-        if (!this.settings.aiFeatures) return false;
-        if (checking) return true;
-        const apiKey = this.settings.openRouterApiKey?.trim();
-        if (!apiKey) {
-          new Notice(
-            "Set your OpenRouter API key in Recipe Vault settings first.",
-          );
-          return;
-        }
-        const model = this.resolveAiModelId();
-        const timeoutMs = Math.max(this.settings.aiTimeoutMs ?? 45000, 5000);
-        new PhotoRecipeModal(
-          this.app,
-          (images) =>
-            requestRecipeFromImage({
-              apiKey,
-              model,
-              images,
-              timeoutMs,
-              systemPrompt: this.settings.aiSystemPrompt,
-            }),
-          (submission) => {
-            const { result, imageBlob } = submission;
-            const recipe: ParsedRecipe = {
-              name: result.name,
-              author: result.author || undefined,
-              description: result.description || undefined,
-              totalTime: result.totalTime || undefined,
-              recipeIngredient: result.recipeIngredient,
-              // The template renders string steps via its `this.text` branch, so
-              // wrap each transcribed line as an InstructionStep.
-              recipeInstructions: result.recipeInstructions.map((text) => ({
-                text,
-              })),
-            };
-            if (result.recipeYield) recipe.recipeYield = result.recipeYield;
-            void this.saveParsedRecipe(recipe, {
-              localImage: imageBlob,
-              source: "photo",
-            });
-          },
-        ).open();
-      },
+      name: "Rezept aus Foto importieren",
+      callback: () => this.openImportModal("photo"),
     });
+
+    // Import-only build: drop the gallery, cook mode, shopping list,
+    // nutrition and bulk-import commands once they exist.
+    this.app.workspace.onLayoutReady(() => this.stripNonImportCommands());
 
     // Command to increment times_made on the active recipe file
     this.addCommand({
@@ -2976,6 +2924,186 @@ export default class RecipeVault extends Plugin {
       console.error(`Recipe Vault: ${label} export failed`, file.path, error);
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`${label} export failed: ${msg}`, 10000);
+    }
+  }
+
+  /* ---------------------- import-only: AI note import ---------------------- */
+
+  private openImportModal(mode: "url" | "photo", presetUrl?: string): void {
+    new ImportNoteModal(this.app, {
+      mode,
+      presetUrl,
+      fromUrl: (url) => this.importNoteFromUrl(url),
+      fromImages: (images) => this.importNoteFromImages(images),
+      save: (draft, title) => this.saveImportedNote(draft, title),
+    }).open();
+  }
+
+  /** Provider settings in the shape the transport wants. */
+  private aiConfig(): AIConfig {
+    const s = this.settings;
+    return {
+      provider: s.aiProvider === "gemini" ? "gemini" : "openai",
+      apiKey: (s.aiApiKey ?? "").trim(),
+      baseUrl: (s.aiBaseUrl ?? "").trim(),
+      model: this.importModel(),
+      timeoutMs: Math.max(s.aiTimeoutMs ?? 45000, 5000),
+    };
+  }
+
+  private importModel(): string {
+    const s = this.settings;
+    const custom = (s.importModel ?? "").trim();
+    if (custom) return custom;
+    return s.aiProvider === "gemini"
+      ? DEFAULT_GEMINI_MODEL
+      : DEFAULT_OPENAI_MODEL;
+  }
+
+  private todayIso(): string {
+    const now = new Date();
+    const pad = (value: number) => (value < 10 ? `0${value}` : String(value));
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  }
+
+  private importLanguage(): string {
+    return (this.settings.targetLanguage ?? "").trim() || "Deutsch";
+  }
+
+  private async importNoteFromImages(images: string[]): Promise<NoteDraft> {
+    const note = await generateText(this.aiConfig(), {
+      system: buildImportPrompt({
+        language: this.importLanguage(),
+        today: this.todayIso(),
+      }),
+      text:
+        images.length > 1
+          ? "Hier ist das Rezept als Foto, die Bilder sind Seiten eines Rezepts in dieser Reihenfolge."
+          : "Hier ist das Rezept als Foto.",
+      images,
+    });
+    return { note: stripFence(note) };
+  }
+
+  private async importNoteFromUrl(url: string): Promise<NoteDraft> {
+    const recipes = await this.fetchRecipes(url);
+    if (!recipes?.length) {
+      throw new Error(
+        "Auf dieser Seite wurde kein Rezept gefunden. Bei Seiten ohne Rezeptdaten hilft ein Foto oder eingefügter Text.",
+      );
+    }
+    const source = this.recipeSourceText(recipes[0], url);
+    const note = await generateText(this.aiConfig(), {
+      system: buildTextImportPrompt({
+        language: this.importLanguage(),
+        today: this.todayIso(),
+        sourceUrl: url,
+      }),
+      text: source,
+    });
+    return { note: stripFence(note) };
+  }
+
+  /** Plain-text view of a scraped recipe, for the text prompt. */
+  private recipeSourceText(recipe: ParsedRecipe, url: string): string {
+    const scalar = (value: unknown): string =>
+      typeof value === "string" || typeof value === "number"
+        ? String(value)
+        : "";
+    const lines: string[] = [];
+    lines.push(`TITEL: ${scalar(recipe.name)}`);
+    const author = scalar(recipe.author);
+    if (author) lines.push(`AUTOR: ${author}`);
+    const time = scalar(recipe.totalTime);
+    if (time) lines.push(`ZEIT: ${time}`);
+    const yieldText = scalar(recipe.recipeYield);
+    if (yieldText) lines.push(`PORTIONEN: ${yieldText}`);
+    lines.push(`QUELLE: ${url}`, "", "ZUTATEN:");
+    for (const item of recipe.recipeIngredient ?? []) lines.push(`- ${item}`);
+    lines.push("", "ZUBEREITUNG:");
+    for (const step of recipe.recipeInstructions ?? []) {
+      const text =
+        typeof step === "string"
+          ? step
+          : typeof (step as { text?: unknown }).text === "string"
+            ? String((step as { text?: unknown }).text)
+            : "";
+      if (text) lines.push(`- ${text}`);
+    }
+    if (recipe.recipeNotes?.length) {
+      lines.push("", "NOTIZEN:");
+      for (const note of recipe.recipeNotes) lines.push(`- ${note}`);
+    }
+    return lines.join("\n");
+  }
+
+  /** Write the reviewed note into the vault, with its photo if one was attached. */
+  private async saveImportedNote(
+    draft: NoteDraft,
+    title: string,
+  ): Promise<void> {
+    const folder = this.settings.folder?.trim() || "";
+    if (folder) await this.folderCheck(folder);
+
+    const safeName = title.replace(/["*\\/<>:|?]/g, "").trim() || "Rezept";
+    const path = this.freeRecipePath(folder, safeName, "md");
+
+    const note = this.withTitle(draft.note, safeName);
+    const file = await this.app.vault.create(path, note);
+
+    if (draft.imageBlob) {
+      try {
+        await this.saveCooklangPhoto(file, await draft.imageBlob.arrayBuffer());
+      } catch (error) {
+        console.error("Recipe import: saving the photo failed", error);
+        new Notice(
+          "Notiz gespeichert, aber das Foto konnte nicht übernommen werden.",
+        );
+      }
+    }
+
+    new Notice(`Rezept gespeichert: ${file.path}`);
+  }
+
+  /** Keep the front matter's title in sync with the file name. */
+  private withTitle(note: string, title: string): string {
+    const quoted = `title: "${title.replace(/"/g, "'")}"`;
+    if (/^---[\s\S]*?^title:.*$/m.test(note)) {
+      return note.replace(/^title:.*$/m, quoted);
+    }
+    if (note.startsWith("---")) {
+      return note.replace(/^---\n/, `---\nrecipe: true\n${quoted}\n`);
+    }
+    return `---\nrecipe: true\n${quoted}\n---\n\n${note}`;
+  }
+
+  /** Import-only build: remove the commands that don't belong here. */
+  private stripNonImportCommands(): void {
+    const keep = new Set<string>([c.CMD_OPEN_MODAL, c.CMD_RECIPE_FROM_PHOTO]);
+    const drop = [
+      c.CMD_OPEN_RECIPE_GALLERY,
+      c.CMD_COOK_MODE,
+      c.CMD_ADD_TO_SHOPPING_LIST,
+      c.CMD_CLEAR_SHOPPING_LIST,
+      c.CMD_MARK_MADE,
+      c.CMD_BATCH_IMPORT,
+      c.CMD_IMPORT_JSONLD,
+      c.CMD_IMPORT_FOLDER,
+      c.CMD_EXPORT_JSONLD,
+      c.CMD_EXPORT_COOKLANG,
+      c.CMD_NEW_RECIPE_STUB,
+      c.CMD_BACKFILL_INGREDIENTS,
+      c.CMD_BACKFILL_NUTRITION,
+      c.CMD_STOP_NUTRITION,
+    ].filter((id) => !keep.has(id));
+
+    const commands = (
+      this.app as unknown as {
+        commands?: { removeCommand?: (id: string) => void };
+      }
+    ).commands;
+    for (const id of drop) {
+      commands?.removeCommand?.(`${this.manifest.id}:${id}`);
     }
   }
 
