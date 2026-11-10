@@ -110,33 +110,6 @@ export const LEGACY_AI_MODEL_PRESETS: Record<string, string> = {
 const AI_MODEL_OTHER = "__other__";
 
 /**
- * Import-only build: settings that belong to the gallery, cook mode, shopping
- * list and the old Ask-AI path are hidden rather than deleted, so this file
- * stays mergeable with upstream.
- */
-const HIDDEN_IN_IMPORT_ONLY = new Set<string>([
-  "Recipe layout on small screens",
-  "Show nutrition",
-  "Show Cook button",
-  "Collapse properties on recipes",
-  "Save new recipes as",
-  "Save in currently opened file",
-  "Template file",
-  "Recipe template",
-  "Shopping list file",
-  "Recipe gallery folder",
-  "AI features",
-  "AI model ID",
-  "Custom AI system prompt",
-  "Remove filler words from titles",
-  "Filler words to keep",
-  "Extra filler words",
-  "Filter vegan words",
-  "Filter gluten-free words",
-  "Recipe language",
-]);
-
-/**
  * One-click provider presets. Each writes provider + base URL + model, so the
  * user doesn't have to know that Groq is "OpenAI-compatible with a different
  * host" — and switching to a second free quota is two clicks.
@@ -376,15 +349,17 @@ export class SettingsTab extends PluginSettingTab {
 
   getSettingDefinitions(): SettingDefinitionItem[] {
     this.containerEl.addClass("settingsTemplate");
-    return this.rows().map((row) => ({
-      name: row.name,
-      desc: row.desc,
-      visible: row.visible,
-      render: (setting: Setting) => {
-        if (row.cls) setting.setClass(row.cls);
-        row.render(setting);
-      },
-    }));
+    return this.curatedRows()
+      .filter((entry): entry is { row: SettingRow } => "row" in entry)
+      .map(({ row }) => ({
+        name: row.name,
+        desc: row.desc,
+        visible: row.visible,
+        render: (setting: Setting) => {
+          if (row.cls) setting.setClass(row.cls);
+          row.render(setting);
+        },
+      }));
   }
 
   /** Fallback for Obsidian before 1.13, which never calls the definitions. */
@@ -397,8 +372,12 @@ export class SettingsTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("settingsTemplate");
 
-    for (const row of this.rows()) {
-      if (HIDDEN_IN_IMPORT_ONLY.has(row.name)) continue;
+    for (const entry of this.curatedRows()) {
+      if ("heading" in entry) {
+        new Setting(containerEl).setName(entry.heading).setHeading();
+        continue;
+      }
+      const { row } = entry;
       if (row.visible && !row.visible()) continue;
       const setting = new Setting(containerEl).setName(row.name);
       if (row.desc) setting.setDesc(row.desc);
@@ -421,6 +400,113 @@ export class SettingsTab extends PluginSettingTab {
     return (
       preset === AI_MODEL_OTHER ||
       !AI_MODEL_PRESETS.some((p) => p.id === preset)
+    );
+  }
+
+  /**
+   * The settings tab in the order a person actually needs it: what the import
+   * talks to, where it writes, then the knobs nobody touches twice. Rows come
+   * from `rows()` so upstream stays the source of truth — anything not listed
+   * here simply doesn't exist in this import-only build.
+   */
+  private curatedRows(): Array<{ heading: string } | { row: SettingRow }> {
+    const upstream = new Map(this.rows().map((row) => [row.name, row]));
+    const pick = (
+      name: string,
+      overrides: Partial<SettingRow> = {},
+    ): { row: SettingRow } | null => {
+      const row = upstream.get(name);
+      return row ? { row: { ...row, ...overrides } } : null;
+    };
+
+    const entries: Array<{ heading: string } | { row: SettingRow } | null> = [
+      { heading: "Import" },
+      pick("Anbieter", {
+        name: "KI-Anbieter",
+        desc:
+          "Ein Klick setzt Basis-URL und Modell mit. Gemini: beste Formatierung, knappes Gratis-Kontingent. " +
+          "Groq: sehr schnell, 1.000 Anfragen/Tag gratis. Ollama: kein Kontingent, lokal oder auf dem NAS.",
+      }),
+      pick("API-Schlüssel", {
+        desc:
+          "Liegt im Klartext in dieser Vault-Konfiguration. Gemini: aistudio.google.com · " +
+          "Groq: console.groq.com/keys. Bei Ollama leer lassen.",
+      }),
+      pick("Modell", {
+        desc: "Leer = Standard des Anbieters (Gemini: gemini-3.6-flash, Groq: qwen/qwen3.8-27b).",
+      }),
+      pick("Zielsprache", {
+        name: "Sprache der Rezepte",
+        desc: "Importe werden in diese Sprache geschrieben und bei Bedarf übersetzt.",
+      }),
+      pick("Denkzeit (Gemini)", {
+        name: "Gründlich nachdenken (Gemini)",
+        desc:
+          "An: das Modell überlegt zuerst — langsamer, aber strenger im Cooklang-Format. " +
+          "Aus: etwa doppelt so schnell.",
+      }),
+
+      { heading: "Speichern" },
+      pick("Recipe save folder", {
+        name: "Speicherordner",
+        desc: "Ordner im Vault für neue Rezepte. Leer lassen für die Vault-Wurzel.",
+      }),
+
+      { heading: "Erweitert" },
+      pick("Basis-URL", {
+        desc:
+          "Nur für OpenAI-kompatible Anbieter. Leer = OpenRouter. " +
+          "Ollama im LAN: http://<nas-ip>:11434/v1",
+      }),
+      pick("AI request timeout (ms)", {
+        name: "Zeitlimit pro Versuch",
+        desc: "In Sekunden, pro Anfrage. Wiederholungen und das Ausweichmodell bekommen ihr eigenes Zeitlimit.",
+        render: (setting) => {
+          setting.addText((text) => {
+            text
+              .setPlaceholder("90")
+              .setValue(
+                String(
+                  Math.round(
+                    (this.plugin.settings.aiTimeoutMs ?? 90000) / 1000,
+                  ),
+                ),
+              )
+              .onChange(async (value) => {
+                const seconds = Number(value.trim());
+                if (!Number.isFinite(seconds) || seconds < 15) return;
+                this.plugin.settings.aiTimeoutMs = Math.min(
+                  Math.round(seconds * 1000),
+                  600000,
+                );
+                await this.plugin.saveSettings();
+              });
+            text.inputEl.type = "number";
+            text.inputEl.min = "15";
+            text.inputEl.max = "600";
+            text.inputEl.addClass("recipe-vault-input-full");
+          });
+        },
+      }),
+      pick("Proxy fallback for blocked imports", {
+        name: "Proxy-Fallback für blockierte Seiten",
+        desc:
+          "Leitet die Rezept-URL an Dritte weiter (r.jina.ai, allorigins), wenn eine Seite den " +
+          "direkten Abruf blockt. Nur einschalten, wenn ein Import sonst scheitert.",
+      }),
+      pick("Decode entities", {
+        name: "HTML-Entities umwandeln",
+        desc: "Wandelt &amp;, &quot; und ähnliche Entities beim Web-Import in echte Zeichen.",
+      }),
+      pick("Debug mode", {
+        name: "Debug-Protokoll",
+        desc: "Ausführliche Logs in der Konsole (Strg+Shift+I). Nur zur Fehlersuche.",
+      }),
+    ];
+
+    return entries.filter(
+      (entry): entry is { heading: string } | { row: SettingRow } =>
+        entry !== null,
     );
   }
 
