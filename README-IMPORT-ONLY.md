@@ -50,24 +50,55 @@ next to the upstream `recipe-vault` without collisions.
 
 *Settings → Recipe In*
 
-- **KI-Anbieter** — `Google Gemini (AI Studio)` or `OpenAI-kompatibel`
-- **API-Schlüssel** — Gemini `AQ.`/`AIza…`, an OpenRouter key, or blank for local Ollama
+- **KI-Anbieter** — one click sets base URL and model: `Google Gemini (AI Studio)`,
+  `Groq`, `OpenCode Go`, `OpenRouter`, `Mistral`, `Ollama`, or another
+  OpenAI-compatible provider
+- **API-Schlüssel (`<provider>`)** — **one field per provider**, and only the field
+  of the selected provider is shown. Switching providers can no longer overwrite a
+  key you typed for another one. A key stored by an older version moves to the
+  provider that was selected at the time. Blank for local Ollama.
 - **Basis-URL** — OpenAI-compatible only; blank = `https://openrouter.ai/api/v1`,
-  Ollama = `http://localhost:11434/v1`
-- **Modell** — blank = `gemini-3.6-flash` (Gemini) / `google/gemini-3.5-flash-lite` (OpenAI)
+  Ollama = `http://localhost:11434/v1`, OpenCode Go = `https://opencode.ai/zen/go/v1`
+- **Modell** — blank = the endpoint's default (`gemini-3.6-flash`, Groq →
+  `qwen/qwen3.8-27b`, OpenCode Go → `deepseek-v4.1-flash`, OpenRouter →
+  `google/gemini-3.5-flash-lite`, Ollama → `qwen3-vl:8b`)
 - **Zielsprache** — language of the finished note (default `Deutsch`)
 - **Denkzeit (Gemini)** — on = model reasons first (slower, tighter Cooklang);
   off ≈ twice as fast, slightly looser format
 - **AI request timeout (ms)** — per attempt, default 90 000
 - **Recipe save folder** — where notes land (`Recipes` by default)
+- **Angelegtes Rezept öffnen** — on (default): the new note opens right after
+  saving, with the title-picture dialog on top of it. Off: the note is only filed.
+
+### OpenCode Go
+
+The Go subscription lane (`https://opencode.ai/zen/go/v1`, bearer auth,
+`/chat/completions`) works with the plain OpenAI transport. Two things are
+Go-specific:
+
+- Requests carry `x-opencode-session` (a per-import id), which the relay uses for
+  routing and prompt caching.
+- Only models that serve **chat/completions with image input** can read photos:
+  `deepseek-v4.1-flash` (default), `glm-5.3-flash`, `mimo-v2.6-flash`/`-pro`,
+  `kimi-k3*`, `hy4`, `minimax-m3.1-flash`, `longcat-2.5-free`. `gemini-4-argon`
+  and the Qwen3.8 models speak Google/Anthropic wire formats and are **not**
+  reachable through this transport. `GET https://opencode.ai/zen/go/v1/models`
+  is public and lists every model with its modalities and endpoint. Go is a paid
+  subscription (€10/month) — imports spend that quota.
 
 ## Resilience
 
 - Each attempt gets its own timeout, so a retry never eats the previous budget.
 - 429/5xx are retried twice with backoff, then one fallback model is tried
-  (`gemini-3.1-flash-lite`), turning "overloaded, try later" into a slow success.
+  (`gemini-flash-lite-latest`), turning "overloaded, try later" into a slow success.
 - Photos are downscaled to 1600 px / JPEG 0.85 in the dialog before upload — a 4 MB
   phone picture becomes a few hundred KB, which also cuts token cost.
+- Photo picking goes through one helper (`src/utils/file-picker.ts`) that appends
+  the `<input type="file">` to the document instead of leaving it detached. A
+  detached input can lose its `change` listener on iOS while the native picker is
+  up — the first pick then did nothing and the second one worked. A change event
+  that arrives without a file now says so (`Keine Datei erhalten …`) rather than
+  silently re-rendering.
 
 ## Hero picture
 
