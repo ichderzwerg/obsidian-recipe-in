@@ -24,6 +24,23 @@ export interface AIConfig {
   thinking?: boolean;
   /** Tried once if the main model answers 429/5xx after its retries. */
   fallbackModel?: string;
+  /**
+   * Sent as `x-opencode-session` on OpenCode's relay, which routes and caches
+   * per conversation. Stable across the retries of one import.
+   */
+  sessionId?: string;
+}
+
+/**
+ * A session id for providers that route or cache per conversation. Only needs
+ * to be unique, not secret.
+ */
+export function newSessionId(): string {
+  const webCrypto = globalThis.crypto as Crypto | undefined;
+  if (webCrypto?.randomUUID) return webCrypto.randomUUID();
+  return `recipe-in-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
 }
 
 export interface AIRequest {
@@ -125,6 +142,7 @@ async function callOpenAI(cfg: AIConfig, req: AIRequest): Promise<string> {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${cfg.apiKey}`,
+      ...(cfg.sessionId ? { "x-opencode-session": cfg.sessionId } : {}),
     },
     body: JSON.stringify({
       model: cfg.model,

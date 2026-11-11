@@ -1,5 +1,6 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import type { RecipeFromImageResult } from "./utils/openrouter";
+import { pickImageFiles } from "./utils/file-picker";
 
 /** What the modal hands back to main.ts once the user saves. */
 export interface PhotoRecipeSubmission {
@@ -134,18 +135,8 @@ export class PhotoRecipeModal extends Modal {
     );
   }
 
-  private pickImages(): void {
-    const input = createEl("input", {
-      attr: { type: "file", accept: "image/*", multiple: "" },
-    });
-    // Intentionally no `capture` attribute: on mobile it forces the camera and
-    // makes the OS ignore `multiple` and the photo library, which would break
-    // both picking existing cookbook photos and the multi-page flow. The native
-    // picker still offers "Take Photo" as an option.
-    input.addEventListener("change", () => {
-      void this.addFiles(Array.from(input.files ?? []));
-    });
-    input.click();
+  private async pickImages(): Promise<void> {
+    await this.addFiles(await pickImageFiles({ multiple: true }));
   }
 
   private async addFiles(files: File[]): Promise<void> {
@@ -353,11 +344,8 @@ export class PhotoRecipeModal extends Modal {
     if (this.imageChoice === "different") {
       new Setting(el).setName("Food photo").addButton((btn) =>
         btn.setButtonText("Choose image…").onClick(() => {
-          const input = createEl("input", {
-            attr: { type: "file", accept: "image/*" },
-          });
-          input.addEventListener("change", () => {
-            const file = input.files?.[0];
+          void (async () => {
+            const [file] = await pickImageFiles();
             if (!file) return;
             if (this.differentImage) {
               URL.revokeObjectURL(this.differentImage.previewUrl);
@@ -367,8 +355,7 @@ export class PhotoRecipeModal extends Modal {
               previewUrl: URL.createObjectURL(file),
             };
             this.render();
-          });
-          input.click();
+          })();
         }),
       );
       if (this.differentImage) {

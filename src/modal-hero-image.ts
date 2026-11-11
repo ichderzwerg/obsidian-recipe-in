@@ -1,4 +1,5 @@
 import { App, Modal, Notice, Setting } from "obsidian";
+import { pickImageFiles } from "./utils/file-picker";
 
 /**
  * "Add a hero picture?" — offered right after an import, while the photos are
@@ -513,13 +514,7 @@ export class HeroImageModal extends Modal {
   }
 
   private async pickOtherImage(): Promise<void> {
-    const input = createEl("input", {
-      attr: { type: "file", accept: "image/*" },
-    });
-    input.addEventListener("change", () => {
-      const file = input.files?.[0];
-      if (file) void this.addFile(file);
-    });
-    input.click();
+    const [file] = await pickImageFiles();
+    if (file) await this.addFile(file);
   }
 }

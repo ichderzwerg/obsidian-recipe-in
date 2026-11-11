@@ -40,6 +40,7 @@ import {
 } from "./modal-hero-image";
 import {
   generateText,
+  newSessionId,
   stripFence,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_GEMINI_FALLBACK_MODEL,
@@ -1764,6 +1765,12 @@ export default class RecipeVault extends Plugin {
       await this.saveData(this.settings);
     }
 
+    // One key field used to serve every provider; move the stored key to the
+    // provider that was selected at the time.
+    if (settings.migrateApiKeySettings(this.settings)) {
+      await this.saveData(this.settings);
+    }
+
     // Presets get swapped for newer models over time. Move anyone still on a
     // retired preset to its replacement, so the dropdown doesn't fall back to
     // "Other (custom)" with an empty field.
@@ -3115,18 +3122,25 @@ export default class RecipeVault extends Plugin {
       fromUrl: (url) => this.importNoteFromUrl(url),
       fromImages: (images) => this.importNoteFromImages(images),
       save: (draft, title) => this.saveImportedNote(draft, title),
-      afterSave: (file, originals, draft) =>
-        this.offerHeroImage(file, originals, draft),
+      afterSave: (file, originals, draft) => {
+        // Opening first means the crop dialog sits on top of the finished
+        // note instead of on whatever happened to be open.
+        if (this.settings.openAfterImport) {
+          void this.app.workspace.openLinkText(file.path, "", false);
+        }
+        return this.offerHeroImage(file, originals, draft);
+      },
     }).open();
   }
 
   /** Provider settings in the shape the transport wants. */
   private aiConfig(): AIConfig {
     const s = this.settings;
+    const baseUrl = (s.aiBaseUrl ?? "").trim();
     return {
       provider: s.aiProvider === "gemini" ? "gemini" : "openai",
-      apiKey: (s.aiApiKey ?? "").trim(),
-      baseUrl: (s.aiBaseUrl ?? "").trim(),
+      apiKey: settings.currentApiKey(s),
+      baseUrl,
       model: this.importModel(),
       timeoutMs: Math.max(s.aiTimeoutMs ?? 90000, 15000),
       thinking: s.aiThinking !== false,
@@ -3134,6 +3148,9 @@ export default class RecipeVault extends Plugin {
       // model turns "try again later" into a slow but successful import.
       fallbackModel:
         s.aiProvider === "gemini" ? DEFAULT_GEMINI_FALLBACK_MODEL : "",
+      // OpenCode's relay routes and caches on a session id; without it the
+      // request still works, but every import pays full price.
+      sessionId: /opencode\.ai/.test(baseUrl) ? newSessionId() : undefined,
     };
   }
 

@@ -1,4 +1,5 @@
 import { App, Modal, Notice, Setting, TFile } from "obsidian";
+import { pickImageFiles } from "./utils/file-picker";
 
 /**
  * One import dialog for both sources: a URL or one or more photos.
@@ -229,29 +230,17 @@ export class ImportNoteModal extends Modal {
   }
 
   private async pickImages(): Promise<void> {
-    const input = createEl("input", {
-      attr: { type: "file", accept: "image/*", multiple: "" },
-    });
-    input.addEventListener("change", () => {
-      const files = Array.from(input.files ?? []);
-      void (async () => {
-        for (const file of files) {
-          const raw = await readFileAsDataUrl(file);
-          this.originals.push(file);
-          this.images.push(await downscale(raw));
-        }
-        if (files.length) {
-          const kb = Math.round(
-            this.images[this.images.length - 1].length / 1024,
-          );
-          new Notice(
-            `${files.length} Bild(er) vorbereitet (~${kb} KB übertragen)`,
-          );
-        }
-        this.render();
-      })();
-    });
-    input.click();
+    const files = await pickImageFiles({ multiple: true });
+    for (const file of files) {
+      const raw = await readFileAsDataUrl(file);
+      this.originals.push(file);
+      this.images.push(await downscale(raw));
+    }
+    if (files.length) {
+      const kb = Math.round(this.images[this.images.length - 1].length / 1024);
+      new Notice(`${files.length} Bild(er) vorbereitet (~${kb} KB übertragen)`);
+      this.render();
+    }
   }
 
   /* ------------------------------ run ------------------------------ */

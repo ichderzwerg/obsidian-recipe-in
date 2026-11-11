@@ -42,6 +42,8 @@ export interface PluginSettings {
   /** What new recipes are saved as. Existing files stay in their format. */
   recipeFormat: "markdown" | "cooklang";
   saveInActiveFile: boolean;
+  /** Open the note an import just wrote, instead of leaving it closed. */
+  openAfterImport: boolean;
   imgFolder: string;
   saveImg: boolean;
   saveImgSubdir: boolean;
@@ -59,8 +61,12 @@ export interface PluginSettings {
   aiFeatures: boolean;
   /** Which wire format the import uses. */
   aiProvider: "gemini" | "openai";
-  /** Key for the chosen provider (Gemini AQ./AIza… or an OpenAI-compatible key). */
-  aiApiKey: string;
+  /**
+   * API key per provider preset id (`gemini`, `groq`, `opencode-go`, …).
+   * One field per provider, so switching providers can never overwrite a key
+   * that belongs to another one.
+   */
+  aiKeys: Record<string, string>;
   /** Base URL for OpenAI-compatible endpoints; blank = OpenRouter. */
   aiBaseUrl: string;
   /** Model id for imports; blank = the provider's default. */
@@ -121,6 +127,11 @@ export interface ProviderPreset {
   provider: "gemini" | "openai";
   baseUrl: string;
   model: string;
+  /** Heading of this provider's own key field ("API-Schlüssel (Groq)"). */
+  keyLabel: string;
+  keyPlaceholder: string;
+  /** Where the key comes from, shown under the field. */
+  keyHelp: string;
 }
 
 /**
@@ -135,6 +146,7 @@ export function defaultImportModel(provider: string, baseUrl: string): string {
   const base = (baseUrl || "").toLowerCase();
   if (base.includes("groq.com")) return "qwen/qwen3.8-27b";
   if (base.includes("mistral.ai")) return "mistral-small-latest";
+  if (base.includes("opencode.ai")) return "deepseek-v4.1-flash";
   if (base.includes("11434")) return "qwen3-vl:8b";
   return DEFAULT_OPENAI_MODEL;
 }
@@ -146,6 +158,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     provider: "gemini",
     baseUrl: "",
     model: "",
+    keyLabel: "Google Gemini",
+    keyPlaceholder: "AQ.Ab… oder AIza…",
+    keyHelp:
+      "Schlüssel von aistudio.google.com. AQ.-Schlüssel funktionieren nur hier, nicht bei OpenAI-kompatiblen Anbietern.",
   },
   {
     id: "groq",
@@ -153,13 +169,21 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     provider: "openai",
     baseUrl: "https://api.groq.com/openai/v1",
     model: "qwen/qwen3.8-27b",
+    keyLabel: "Groq",
+    keyPlaceholder: "gsk_…",
+    keyHelp:
+      "Schlüssel von console.groq.com/keys. Eigenes, kostenloses Tageskontingent.",
   },
   {
-    id: "mistral",
-    label: "Mistral (nur mit Abrechnung — Free-Tier ohne API-Schlüssel)",
+    id: "opencode-go",
+    label: "OpenCode Go (Abo, Coding-Modelle)",
     provider: "openai",
-    baseUrl: "https://api.mistral.ai/v1",
-    model: "mistral-small-latest",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    model: "deepseek-v4.1-flash",
+    keyLabel: "OpenCode Go",
+    keyPlaceholder: "sk-…",
+    keyHelp:
+      "Schlüssel aus dem OpenCode-Go-Abo (opencode.ai/auth). Verbraucht das Monatskontingent des Abos.",
   },
   {
     id: "openrouter",
@@ -167,6 +191,20 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     provider: "openai",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "google/gemini-3.5-flash-lite",
+    keyLabel: "OpenRouter",
+    keyPlaceholder: "sk-or-v1-…",
+    keyHelp: "Schlüssel von openrouter.ai/keys. 50 Anfragen/Tag gratis.",
+  },
+  {
+    id: "mistral",
+    label: "Mistral (nur mit Abrechnung — Free-Tier ohne API-Schlüssel)",
+    provider: "openai",
+    baseUrl: "https://api.mistral.ai/v1",
+    model: "mistral-small-latest",
+    keyLabel: "Mistral",
+    keyPlaceholder: "…",
+    keyHelp:
+      "Seit November 2026 gibt es keine kostenlosen Schlüssel mehr — Abrechnung nötig.",
   },
   {
     id: "ollama",
@@ -174,6 +212,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     provider: "openai",
     baseUrl: "http://localhost:11434/v1",
     model: "",
+    keyLabel: "Ollama",
+    keyPlaceholder: "leer lassen",
+    keyHelp:
+      "Ohne Schlüssel. Läuft lokal oder auf dem NAS, ganz ohne Kontingent.",
   },
   {
     id: "custom",
@@ -181,6 +223,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     provider: "openai",
     baseUrl: "",
     model: "",
+    keyLabel: "eigener Anbieter",
+    keyPlaceholder: "…",
+    keyHelp:
+      "Für alles, was /chat/completions spricht und hier nicht aufgeführt ist.",
   },
 ];
 
@@ -192,6 +238,9 @@ export function currentPreset(s: {
   if (s.aiProvider === "gemini") return "gemini";
   const base = (s.aiBaseUrl || "").replace(/\/+$/, "");
   if (base === "https://api.groq.com/openai/v1") return "groq";
+  // Go lives on its own path under opencode.ai; Zen (`/zen/v1`) stays "custom"
+  // because it is pay-per-token, not the subscription lane.
+  if (/opencode\.ai\/(zen|inference)\/go/.test(base)) return "opencode-go";
   if (base === "https://api.mistral.ai/v1") return "mistral";
   if (base === "https://openrouter.ai/api/v1") return "openrouter";
   if (
@@ -217,6 +266,24 @@ export function applyPreset(
   s.importModel = preset.model;
 }
 
+/** The API key stored for the currently selected provider. */
+export function currentApiKey(s: PluginSettings): string {
+  return (s.aiKeys?.[currentPreset(s)] ?? "").trim();
+}
+
+/** Store — or clear, when empty — the key belonging to one provider preset. */
+export function setApiKey(
+  s: PluginSettings,
+  presetId: string,
+  value: string,
+): void {
+  const keys = { ...(s.aiKeys ?? {}) };
+  const trimmed = value.trim();
+  if (trimmed) keys[presetId] = trimmed;
+  else delete keys[presetId];
+  s.aiKeys = keys;
+}
+
 export const DEFAULT_SETTINGS: PluginSettings = {
   mobileRecipeLayout: "classic",
   collapseRecipeProperties: true,
@@ -225,6 +292,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   folder: "Recipes",
   recipeFormat: "markdown",
   saveInActiveFile: false,
+  /** Open the note an import just wrote. */
+  openAfterImport: true,
   imgFolder: "",
   saveImg: false,
   saveImgSubdir: false,
@@ -238,7 +307,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   recipeGalleryFolder: "",
   aiFeatures: true,
   aiProvider: "gemini",
-  aiApiKey: "",
+  aiKeys: {},
   aiBaseUrl: "",
   importModel: "",
   targetLanguage: "Deutsch",
@@ -281,6 +350,31 @@ export function migrateFillerWordSettings(
   }
   delete s.fillerWordsMode;
   delete s.customFillerWords;
+  return true;
+}
+
+/** Settings from when a single key field served every provider. */
+interface LegacyApiKeySettings {
+  aiApiKey?: string;
+}
+
+/**
+ * One key field used to follow the selected provider, so typing a Groq key
+ * silently replaced the Gemini one. Keys are stored per preset now; the old
+ * value moves to whichever preset is selected — the one it was typed for.
+ */
+export function migrateApiKeySettings(
+  s: PluginSettings & LegacyApiKeySettings,
+): boolean {
+  if (s.aiApiKey === undefined) return false;
+  const legacy = (s.aiApiKey ?? "").trim();
+  if (legacy) {
+    const id = currentPreset(s);
+    const keys = { ...(s.aiKeys ?? {}) };
+    if (!keys[id]) keys[id] = legacy;
+    s.aiKeys = keys;
+  }
+  delete s.aiApiKey;
   return true;
 }
 
@@ -421,6 +515,40 @@ export class SettingsTab extends PluginSettingTab {
   }
 
   /**
+   * One key field per provider, of which exactly one is visible: the one for
+   * the provider selected above. A single shared field is how a Groq key could
+   * silently replace the Gemini one — the ids here are the preset ids, so each
+   * provider keeps its own key in `settings.aiKeys`.
+   */
+  private apiKeyRows(): Array<{ row: SettingRow }> {
+    return PROVIDER_PRESETS.map((preset) => ({
+      row: {
+        name: `API-Schlüssel (${preset.keyLabel})`,
+        desc: `${preset.keyHelp} Wird im Klartext in dieser Vault-Konfiguration gespeichert.`,
+        visible: () =>
+          currentPreset({
+            aiProvider: this.plugin.settings.aiProvider,
+            aiBaseUrl: this.plugin.settings.aiBaseUrl,
+          }) === preset.id,
+        render: (setting) => {
+          setting.addText((text) => {
+            text
+              .setPlaceholder(preset.keyPlaceholder)
+              .setValue(this.plugin.settings.aiKeys?.[preset.id] ?? "")
+              .onChange(async (value) => {
+                setApiKey(this.plugin.settings, preset.id, value);
+                await this.plugin.saveSettings();
+              });
+            text.inputEl.type = "password";
+            text.inputEl.autocomplete = "off";
+            text.inputEl.addClass("recipe-vault-input-full");
+          });
+        },
+      },
+    }));
+  }
+
+  /**
    * The settings tab in the order a person actually needs it: what the import
    * talks to, where it writes, then the knobs nobody touches twice. Rows come
    * from `rows()` so upstream stays the source of truth — anything not listed
@@ -444,11 +572,7 @@ export class SettingsTab extends PluginSettingTab {
           "Ein Klick setzt Basis-URL und Modell mit. Gemini: beste Formatierung, knappes Gratis-Kontingent. " +
           "Groq: sehr schnell, 1.000 Anfragen/Tag gratis. Ollama: kein Kontingent, lokal oder auf dem NAS.",
       }),
-      pick("API-Schlüssel", {
-        desc:
-          "Liegt im Klartext in dieser Vault-Konfiguration. Gemini: aistudio.google.com · " +
-          "Groq: console.groq.com/keys. Bei Ollama leer lassen.",
-      }),
+      ...this.apiKeyRows(),
       pick("Modell", {
         desc: "Leer = Standard des Anbieters (Gemini: gemini-3.6-flash, Groq: qwen/qwen3.8-27b).",
       }),
@@ -468,6 +592,24 @@ export class SettingsTab extends PluginSettingTab {
         name: "Speicherordner",
         desc: "Ordner im Vault für neue Rezepte. Leer lassen für die Vault-Wurzel.",
       }),
+      {
+        row: {
+          name: "Angelegtes Rezept öffnen",
+          desc:
+            "Die neue Notiz nach dem Speichern gleich anzeigen. Aus: sie landet nur im Ordner, " +
+            "und der Titelbild-Dialog ist der einzige, was noch aufgeht.",
+          render: (setting) => {
+            setting.addToggle((toggle) => {
+              toggle
+                .setValue(this.plugin.settings.openAfterImport)
+                .onChange(async (value) => {
+                  this.plugin.settings.openAfterImport = value;
+                  await this.plugin.saveSettings();
+                });
+            });
+          },
+        },
+      },
 
       { heading: "Erweitert" },
       pick("Basis-URL", {
@@ -932,15 +1074,13 @@ export class SettingsTab extends PluginSettingTab {
         desc: "Wird als Klartext in dieser Vault-Konfiguration gespeichert. Bei Ollama lokal leer lassen.",
         render: (setting) => {
           setting.addText((text) => {
+            const presetId = currentPreset(this.plugin.settings);
+            const preset = PROVIDER_PRESETS.find((p) => p.id === presetId);
             text
-              .setPlaceholder(
-                this.plugin.settings.aiProvider === "gemini"
-                  ? "AQ.Ab… oder AIza…"
-                  : "sk-or-v1-… / ollama",
-              )
-              .setValue(this.plugin.settings.aiApiKey)
+              .setPlaceholder(preset?.keyPlaceholder ?? "…")
+              .setValue(currentApiKey(this.plugin.settings))
               .onChange(async (value) => {
-                this.plugin.settings.aiApiKey = value.trim();
+                setApiKey(this.plugin.settings, presetId, value);
                 await this.plugin.saveSettings();
               });
             text.inputEl.type = "password";
